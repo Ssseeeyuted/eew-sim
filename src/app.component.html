@@ -1,0 +1,448 @@
+<div class="flex flex-col h-screen w-full bg-slate-950 text-slate-100 overflow-hidden font-sans relative">
+  
+  <!-- Header -->
+  <header class="h-14 flex items-center justify-between px-4 bg-slate-900 border-b border-slate-800 z-30 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="bg-gradient-to-br from-red-600 to-purple-800 p-1.5 rounded text-white shadow-lg animate-pulse">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </div>
+      <div>
+        <h1 class="text-sm md:text-lg font-bold tracking-wider text-slate-100 leading-tight">地震速報<span class="text-red-500">PRO</span> <span class="text-xs text-slate-500">TAIWAN-JAPAN</span></h1>
+        <p class="text-[9px] text-slate-500 font-mono tracking-widest uppercase hidden md:block">
+            系統狀態: {{systemStatus()}} | 連線測站: {{stations().length}} 
+        </p>
+      </div>
+    </div>
+    
+    <div class="flex items-center gap-2 md:gap-4">
+      <!-- Mute Button -->
+      <button (click)="toggleMute()" class="p-2 rounded hover:bg-slate-800 transition-colors" title="靜音開關">
+        @if (isMuted()) {
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v6a3 3 A0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+        } @else {
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-400"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+        }
+      </button>
+
+      <!-- Dashboard Toggle (Desktop) -->
+      <button 
+        (click)="toggleTools()"
+        class="hidden md:flex px-3 py-1.5 rounded text-xs font-bold items-center gap-2 transition-colors border"
+        [class]="showTools() ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_10px_#2563eb]' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        監控儀表板
+      </button>
+
+      @if (isSimulating()) {
+        <div class="font-mono text-xl text-yellow-400 font-bold bg-black/40 px-3 py-1 rounded border border-yellow-500/30 whitespace-nowrap">
+            T+{{elapsedTime().toFixed(1)}}s
+        </div>
+      }
+    </div>
+  </header>
+
+  <div class="flex flex-1 overflow-hidden relative">
+    
+    <!-- Sidebar / Bottom Sheet for Controls -->
+    <div class="
+        fixed inset-x-0 bottom-0 md:static md:w-80 md:inset-auto z-40
+        bg-slate-900 border-t md:border-t-0 md:border-r border-slate-800 
+        flex flex-col shadow-2xl transition-transform duration-300
+        max-h-[60vh] md:max-h-full overflow-hidden
+      "
+      [class.translate-y-full]="!showMobileControls() && isMobile()"
+      [class.translate-y-0]="showMobileControls() || !isMobile()"
+    >
+        <!-- Mobile Handle -->
+        <div class="md:hidden w-full flex justify-center py-3 bg-slate-800/80 cursor-pointer active:bg-slate-700" (click)="toggleMobileControls()">
+             <div class="w-12 h-1.5 bg-slate-600 rounded-full"></div>
+        </div>
+
+        <div class="p-4 space-y-4 md:space-y-6 overflow-y-auto flex-1 pb-10 md:pb-4">
+            
+            <!-- CITY COUNTDOWN PANEL (Universal Culture - Moved Inside) -->
+            @if (cityCountdowns().length > 0) {
+                 <div class="bg-slate-950 border border-slate-700 rounded p-3 space-y-2 animate-in slide-in-from-left duration-300">
+                    <div class="text-[10px] text-red-500 font-bold uppercase flex justify-between border-b border-red-900/50 pb-1">
+                         <span>主要城市抵達倒數 (Arrival)</span>
+                         <span class="animate-pulse">⚠ WARNING</span>
+                    </div>
+                    <div class="space-y-2 max-h-48 overflow-y-auto">
+                        @for (city of cityCountdowns(); track city.name) {
+                            <div class="flex items-center justify-between p-2 rounded bg-slate-900/80 border-l-4" [style.border-color]="city.color">
+                                <div class="flex flex-col">
+                                    <span class="text-sm font-bold text-white">{{city.name}}</span>
+                                    <span class="text-[9px] text-slate-400">預估震度: {{city.intensity}}</span>
+                                </div>
+                                <span class="text-2xl font-black font-mono leading-none" [class.text-red-500]="city.seconds <= 10">
+                                    {{city.seconds.toFixed(0)}}<span class="text-[10px] text-slate-500">s</span>
+                                </span>
+                            </div>
+                        }
+                    </div>
+                 </div>
+            }
+
+            <!-- EEW Report Section (Accumulating) -->
+            @if (eewReports().length > 0) {
+                 <div class="bg-slate-950 border border-slate-700 rounded p-3 space-y-2">
+                    <div class="text-[10px] text-green-500 font-bold uppercase flex justify-between">
+                         <span>強震即時警報列表 (EEW Stream)</span>
+                         <span class="animate-pulse">LIVE</span>
+                    </div>
+                    <!-- Accumulating List -->
+                    <div class="h-48 overflow-y-auto space-y-1 font-mono text-[10px] bg-black/50 p-2 rounded flex flex-col-reverse">
+                        @for (report of eewReports(); track report.id) {
+                            <div class="grid grid-cols-[auto_1fr] gap-2 border-b border-slate-800/50 pb-1 mb-1 last:border-0 shrink-0">
+                                <span class="text-slate-500">#{{report.reportNum}}</span>
+                                <div>
+                                    <div class="flex justify-between">
+                                        <span class="text-blue-300 font-bold">預估規模 M{{report.mag.toFixed(1)}}</span>
+                                        <span class="text-slate-400">T+{{report.time.toFixed(1)}}s</span>
+                                    </div>
+                                    <div class="text-slate-500">
+                                        深度: {{report.depth}}km | 觸發測站: {{report.stations}}
+                                        <div class="text-yellow-600/80 text-[9px] mt-0.5" *ngIf="report.isOffshore">⚠ 外海偵測 (Offshore)</div>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                 </div>
+            }
+
+            <!-- Presets -->
+            <div class="space-y-2">
+                <div class="text-[10px] text-slate-500 font-bold uppercase flex items-center justify-between">
+                   <span class="flex items-center gap-2">歷史情境 (Historical)</span>
+                   <button (click)="loadRecentQuakes()" class="text-blue-400 hover:text-blue-300 text-[10px] flex items-center gap-1">
+                      {{ isLoadingRecents() ? '同步中...' : '獲取列表' }}
+                   </button>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button (click)="applyPreset('921')" class="bg-slate-800 hover:bg-slate-700 p-2 rounded text-xs text-slate-300 border border-slate-700 transition-all hover:border-red-500">921 集集地震</button>
+                    <button (click)="applyPreset('0403')" class="bg-slate-800 hover:bg-slate-700 p-2 rounded text-xs text-slate-300 border border-slate-700 transition-all hover:border-red-500">0403 花蓮地震</button>
+                    @for (quake of recentQuakes(); track $index) {
+                      <button (click)="applyPreset(quake)" class="bg-slate-800/50 hover:bg-slate-700 p-2 rounded text-xs text-blue-300 border border-blue-900/30 transition-all hover:border-blue-500 text-left truncate">
+                        {{quake.name.slice(0,6)}} (M{{quake.magnitude}})
+                      </button>
+                    }
+                </div>
+            </div>
+
+            <!-- Parameters -->
+            <div class="space-y-3 pt-4 border-t border-slate-800">
+                <div class="flex justify-between items-center">
+                    <label class="text-xs text-slate-400 font-medium uppercase">設定規模 (Magnitude Mw)</label>
+                    <span class="text-xl font-black font-mono px-2 rounded bg-slate-800 text-white">
+                        {{magnitude().toFixed(1)}}
+                    </span>
+                </div>
+                <input 
+                    type="range" min="3.0" max="9.5" step="0.1" 
+                    [value]="magnitude()" (input)="setMagnitude($event)"
+                    class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-white"
+                />
+            </div>
+
+            <div class="space-y-3">
+                 <div class="flex justify-between items-center">
+                    <label class="text-xs text-slate-400 font-medium uppercase">震源深度 (Depth km)</label>
+                    <span class="text-base font-bold font-mono text-slate-300">{{depth()}}</span>
+                </div>
+                <input 
+                    type="range" min="0" max="150" step="1" 
+                    [value]="depth()" (input)="setDepth($event)"
+                    class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex flex-col gap-2 mt-4">
+                <button 
+                    (click)="spawnEarthquake()"
+                    class="w-full py-4 rounded font-bold text-sm tracking-widest uppercase transition-all shadow-lg flex items-center justify-center gap-2 border border-transparent"
+                    [class]="isSimulating() 
+                        ? 'bg-purple-900/80 hover:bg-purple-800 text-white shadow-purple-900/30 border-purple-500' 
+                        : 'bg-red-900/80 hover:bg-red-800 text-white shadow-red-900/30 border-red-500'"
+                >
+                    @if (isSimulating()) {
+                    <span>⚠ 觸發連鎖餘震 (Trigger)</span>
+                    } @else {
+                    <span>啟動模擬序列 (Start)</span>
+                    }
+                </button>
+                
+                @if (isSimulating()) {
+                    <button 
+                        (click)="emergencyStop()"
+                        class="w-full py-3 rounded font-bold text-sm tracking-widest uppercase transition-all shadow-lg flex items-center justify-center gap-2 border border-red-500 bg-red-950 text-red-500 hover:bg-red-900"
+                    >
+                        <span>⛔ 緊急停止 (EMERGENCY STOP)</span>
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Dashboard (Desktop Only) -->
+    @if (showTools() && !isMobile()) {
+        <div class="w-[400px] bg-slate-950 border-l border-slate-800 flex flex-col z-30 shadow-2xl animate-in slide-in-from-right duration-200 absolute right-0 inset-y-0 md:static">
+             <!-- Tabs -->
+             <div class="flex border-b border-slate-800">
+                @for (tab of ['Visual', 'Telemetry', 'Logs']; track tab) {
+                  <button 
+                    (click)="activeTab.set(tab)"
+                    class="flex-1 py-2 text-[10px] font-bold transition-colors uppercase tracking-widest"
+                    [class]="activeTab() === tab ? 'bg-slate-900 text-blue-400 border-b-2 border-blue-500' : 'text-slate-600 hover:text-slate-300'"
+                  >
+                    @if(tab === 'Visual') { 視覺化 }
+                    @else if(tab === 'Telemetry') { 遙測數據 }
+                    @else { 系統日誌 }
+                  </button>
+                }
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-6 bg-[#050505]">
+                
+                @if (activeTab() === 'Visual') {
+                    <div class="space-y-4">
+                        <div class="text-[10px] font-bold text-blue-400 uppercase tracking-wider flex items-center gap-2 border-b border-slate-800 pb-1">
+                             顯示圖層 (Layers)
+                        </div>
+                        <div class="space-y-2">
+                            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:bg-slate-900 p-2 rounded border border-slate-800/50">
+                                <span>測站分佈 ({{stations().length}} Nodes)</span>
+                                <input type="checkbox" [checked]="showStations()" (change)="toggleShowStations()" class="accent-blue-500">
+                            </label>
+                            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:bg-slate-900 p-2 rounded border border-slate-800/50">
+                                <span>地震波前 (Wavefronts)</span>
+                                <input type="checkbox" [checked]="showWaves()" (change)="toggleShowWaves()" class="accent-blue-500">
+                            </label>
+                        </div>
+
+                         <!-- Selected Station Detail -->
+                        @if (selectedStation()) {
+                            <div class="mt-4 border border-slate-700 rounded bg-slate-900 p-3 animate-in fade-in slide-in-from-bottom-2">
+                                <div class="flex justify-between items-start mb-2">
+                                    <div class="font-bold text-sm text-white">{{selectedStation().name}}</div>
+                                    <button (click)="closeStationPopup()" class="text-slate-500 hover:text-white">✕</button>
+                                </div>
+                                <div class="grid grid-cols-2 gap-y-2 text-[10px] text-slate-400">
+                                    <div>ID: {{selectedStation().id}}</div>
+                                    <div>地質: {{selectedStation().terrain}}</div>
+                                    
+                                    @if (selectedStation().intensity) {
+                                        <div class="col-span-2 mt-2 pt-2 border-t border-slate-800 grid grid-cols-2 gap-2">
+                                            <div class="bg-slate-800 p-1.5 rounded text-center">
+                                                <div class="text-[9px] uppercase text-slate-500">震度 (Intensity)</div>
+                                                <div class="text-xl font-black text-yellow-400">{{selectedStation().intensity}}</div>
+                                            </div>
+                                            <div class="bg-slate-800 p-1.5 rounded text-center">
+                                                <div class="text-[9px] uppercase text-slate-500">PGA (gal)</div>
+                                                <div class="text-xl font-mono text-purple-400">{{selectedStation().pga.toFixed(1)}}</div>
+                                            </div>
+                                            <div class="bg-slate-800 p-1.5 rounded text-center col-span-2">
+                                                <div class="text-[9px] uppercase text-slate-500">PGV (cm/s)</div>
+                                                <div class="text-xl font-mono text-blue-400">{{selectedStation().pgv.toFixed(2)}}</div>
+                                            </div>
+                                            <div class="col-span-2 text-[9px] flex justify-between px-1 mt-1 border-t border-slate-800 pt-1">
+                                                <span>P-Wave Arrive: {{selectedStation().pTime.toFixed(1)}}s</span>
+                                                <span>S-Wave Arrive: {{selectedStation().sTime.toFixed(1)}}s</span>
+                                            </div>
+                                        </div>
+                                    } @else {
+                                         <div class="col-span-2 mt-2 pt-2 border-t border-slate-800 text-center italic text-slate-600">
+                                            等待數據... (Waiting for Event)
+                                         </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (activeTab() === 'Telemetry') {
+                    <div class="space-y-4">
+                        <div class="text-[10px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-2 border-b border-slate-800 pb-1">
+                            即時遙測數據 (Real-time)
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-2">
+                             <div class="bg-slate-900 p-2 rounded border border-slate-800">
+                                <div class="text-[9px] text-slate-500">最大地動加速度 (PGA)</div>
+                                <div class="text-xl font-mono text-purple-400">{{ currentPGA().toFixed(1) }} <span class="text-xs text-slate-600">gal</span></div>
+                            </div>
+                            <div class="bg-slate-900 p-2 rounded border border-slate-800">
+                                <div class="text-[9px] text-slate-500">觸發測站數 (Nodes)</div>
+                                <div class="text-xl font-mono text-yellow-400">{{triggeredStations()}}</div>
+                            </div>
+                        </div>
+
+                        <!-- 1000 Items Matrix - Professional Grid -->
+                        <div class="space-y-1">
+                            <div class="text-[9px] text-slate-500 uppercase flex justify-between">
+                                <span>感測器數據流 (1000ch Data Stream)</span>
+                                <span class="text-green-500 animate-pulse text-[9px] tracking-wider">SYNC {{ (1000/1000).toFixed(0) }}Hz</span>
+                            </div>
+                            <div class="h-[500px] overflow-y-auto font-mono text-[9px] leading-tight bg-black p-2 border border-slate-800 rounded scrollbar-hide">
+                                <div class="grid grid-cols-5 gap-x-4 gap-y-0.5">
+                                    @for (val of sensorMatrix(); track $index) {
+                                        <div class="flex justify-between items-center text-slate-500">
+                                            <span class="text-[8px] opacity-50">{{$index.toString().padStart(4, '0')}}</span>
+                                            <span [class.text-red-500]="val > 50" [class.text-yellow-500]="val > 20 && val <= 50" [class.text-blue-400]="val <= 20">
+                                                {{ val.toFixed(3) }}
+                                            </span>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                @if (activeTab() === 'Logs') {
+                     <div class="h-full bg-black/50 rounded p-2 font-mono text-[10px] text-green-400/80 overflow-y-auto border border-slate-800">
+                         @if (isSimulating()) {
+                             <div>> SYSTEM_INIT_SEQUENCE_START</div>
+                             @for (e of activeEvents(); track e.id) {
+                                <div class="text-yellow-500">> EVENT_DETECTED: ID_{{e.id}} ({{e.type}})</div>
+                             }
+                             @for (r of eewReports(); track r.id) {
+                                <div class="text-blue-400">> REPORT_GEN_{{r.reportNum}}: M{{r.mag.toFixed(1)}} (LinearModel)</div>
+                             }
+                         }
+                     </div>
+                }
+            </div>
+        </div>
+    }
+
+    <!-- MAP CONTAINER -->
+    <div class="flex-1 relative bg-slate-950">
+        <div id="map-container" class="absolute inset-0 z-0 bg-slate-900"></div>
+
+        <!-- Mobile FAB to toggle controls -->
+        <button 
+           (click)="toggleMobileControls()"
+           class="md:hidden absolute bottom-6 right-6 z-[400] bg-slate-800 text-white p-4 rounded-full shadow-2xl border border-slate-700 active:scale-95 transition-transform"
+           [class.translate-y-24]="showMobileControls()"
+        >
+           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        
+        <!-- ALERT STACK CONTAINER -->
+        <div class="absolute top-4 left-4 right-4 z-[450] flex flex-col gap-3 pointer-events-none md:w-96 md:left-auto md:right-4 md:top-4">
+
+            <!-- RAILWAY EMERGENCY STOP BANNER -->
+            @if (railwayAlert()) {
+                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
+                    <div class="bg-orange-600 text-white p-3 shadow-[0_0_20px_rgba(234,88,12,0.6)] flex items-center justify-between gap-4 border-l-8 border-blue-600 rounded-r-lg">
+                         <div class="flex items-center gap-3">
+                             <div class="bg-white text-orange-600 p-1 rounded font-black text-xs uppercase tracking-tighter flex flex-col items-center leading-none">
+                                <span>RAIL</span>
+                                <span>STOP</span>
+                             </div>
+                            <div>
+                                <h2 class="text-lg font-black uppercase tracking-widest leading-none">列車緊急停駛</h2>
+                                <p class="text-[10px] text-white/90 mt-0.5">SHINKANSEN / THSR EMERGENCY BRAKE</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <!-- TSUNAMI WARNING BANNER -->
+            @if (tsunamiAlert()) {
+                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
+                    <div class="bg-red-600 text-white p-3 shadow-[0_0_30px_rgba(220,38,38,0.6)] flex items-center justify-between gap-4 border-y-4 border-yellow-400 rounded-lg">
+                        <div class="flex items-center gap-3">
+                             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-bounce shrink-0"><path d="m2 6 20 12"/><path d="M7 16V6l10 12V8"/></svg>
+                            <div>
+                                <h2 class="text-xl font-black uppercase tracking-widest leading-none">海嘯警報</h2>
+                                <p class="text-[10px] font-bold bg-white text-red-600 px-1 mt-1 inline-block">立即避難 EVACUATE</p>
+                            </div>
+                        </div>
+                        <button (click)="dismissTsunami()" class="text-white/80 hover:text-white p-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                    </div>
+                </div>
+            }
+
+            <!-- EEW ALERT OVERLAY -->
+            @if (systemStatus() === 'ALERTING') {
+                <div class="shadow-2xl animate-in slide-in-from-top-5 duration-300 pointer-events-auto">
+                    <div class="bg-slate-900 border-2 border-red-600 rounded-lg overflow-hidden">
+                        <!-- Header -->
+                        <div class="bg-red-600 px-4 py-2 flex items-center justify-between animate-pulse">
+                            <span class="font-black text-white uppercase text-sm flex items-center gap-2">
+                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                地震速報 (ALERT)
+                            </span>
+                            <span class="text-[10px] bg-white text-red-700 px-1.5 py-0.5 rounded font-mono font-bold">
+                                #{{lastReportNum()}}
+                            </span>
+                        </div>
+                        
+                        <!-- Stats -->
+                        <div class="p-3 bg-slate-800/95 backdrop-blur border-b border-slate-700 grid grid-cols-2 gap-4">
+                             <div>
+                                 <span class="text-[9px] text-slate-400 uppercase">預估規模 (Est Mag)</span>
+                                 <div class="text-3xl font-black text-white">
+                                    {{predictedMagnitude()}}
+                                 </div>
+                                 <div class="text-[9px] text-yellow-400 mt-1 font-bold animate-pulse">
+                                    預計抵達: {{cityCountdowns().length > 0 ? cityCountdowns()[0].seconds.toFixed(0) + 's' : '計算中...'}}
+                                 </div>
+                             </div>
+                             <div class="text-right">
+                                 <span class="text-[9px] text-slate-400 uppercase">最大震度 (Max Int)</span>
+                                 <div class="text-3xl font-mono text-purple-400 font-bold">
+                                     {{maxDetectedIntensity()}}
+                                 </div>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- END REPORT DIALOG -->
+        @if (systemStatus() === 'ENDED') {
+             <div class="absolute inset-0 z-[600] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div class="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-sm w-full p-6 animate-in zoom-in duration-300">
+                    <div class="text-center mb-6">
+                        <div class="text-green-500 font-bold text-xl mb-1">模擬結束 (Sequence End)</div>
+                        <div class="text-slate-400 text-sm">
+                            共偵測到 {{activeEvents().length}} 起地震事件
+                        </div>
+                    </div>
+                    
+                    <!-- Gemini Analysis Section -->
+                    <div class="bg-slate-800/50 rounded p-4 mb-6 min-h-[100px] border border-slate-700 max-h-64 overflow-y-auto">
+                        <div class="flex items-center gap-2 mb-2 text-xs font-bold text-blue-400 uppercase">
+                             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                             Gemini AI 災情分析
+                        </div>
+                        @if (aiAnalysis()) {
+                            <div class="text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap">{{aiAnalysis()}}</div>
+                        } @else {
+                             <div class="flex flex-col items-center justify-center h-20 gap-2">
+                                <span class="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent"></span>
+                                <span class="text-xs text-slate-500">正在分析複合式災害數據...</span>
+                             </div>
+                        }
+                    </div>
+
+                    <button (click)="resetSimulation()" class="w-full bg-slate-700 hover:bg-slate-600 text-white py-3 rounded font-bold transition-colors">
+                        重置系統 (RESET)
+                    </button>
+                </div>
+             </div>
+        }
+
+    </div>
+  </div>
+</div>
