@@ -6,6 +6,10 @@ import { Injectable } from '@angular/core';
 export class AudioService {
   private audioCtx: AudioContext | null = null;
   private isMuted = false;
+  
+  // Track active nodes to prevent overlap
+  private activeOscillator: OscillatorNode | null = null;
+  private activeGain: GainNode | null = null;
 
   constructor() {}
 
@@ -20,6 +24,10 @@ export class AudioService {
 
   toggleMute() {
     this.isMuted = !this.isMuted;
+    // Immediately stop sound if muted
+    if (this.isMuted) {
+        this.stopSiren();
+    }
     return this.isMuted;
   }
 
@@ -45,11 +53,30 @@ export class AudioService {
     osc.stop(this.audioCtx.currentTime + startTime + duration);
   }
 
+  stopSiren() {
+      if (this.activeOscillator) {
+          try {
+              this.activeOscillator.stop();
+              this.activeOscillator.disconnect();
+          } catch(e) {}
+          this.activeOscillator = null;
+      }
+      if (this.activeGain) {
+          try {
+             this.activeGain.disconnect();
+          } catch(e) {}
+          this.activeGain = null;
+      }
+  }
+
   // Simulate a classic two-tone emergency siren
   playPWSSiren() {
     if (this.isMuted) return;
     this.initContext();
     if (!this.audioCtx) return;
+
+    // STOP any existing siren before starting a new one
+    this.stopSiren();
 
     const t = this.audioCtx.currentTime;
     const duration = 6; // Play for 6 seconds
@@ -57,10 +84,12 @@ export class AudioService {
 
     const osc = this.audioCtx.createOscillator();
     osc.type = 'sine';
+    this.activeOscillator = osc;
 
     const gainNode = this.audioCtx.createGain();
     gainNode.gain.setValueAtTime(0.25, t); // volume
     gainNode.gain.linearRampToValueAtTime(0, t + duration); // fade out over the duration
+    this.activeGain = gainNode;
 
     const highFreq = 880; // A5
     const lowFreq = 659; // E5
@@ -77,6 +106,14 @@ export class AudioService {
     
     osc.start(t);
     osc.stop(t + duration);
+    
+    // Auto cleanup ref
+    osc.onended = () => {
+        if (this.activeOscillator === osc) {
+            this.activeOscillator = null;
+            this.activeGain = null;
+        }
+    };
   }
 
   playTriggerSound() {

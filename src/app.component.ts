@@ -1,8 +1,9 @@
-import { Component, OnInit, ElementRef, ViewChild, signal, effect, inject, afterNextRender, computed, HostListener } from '@angular/core';
+import { Component, OnInit, ElementRef, ViewChild, signal, effect, inject, afterNextRender, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhysicsService, Station, SimulationStationData } from './services/physics.service';
 import { AudioService } from './services/audio.service';
 import { GeminiService } from './services/gemini.service';
+import { PhoneAlertComponent } from './components/phone-alert.component';
 import * as L from 'leaflet';
 
 interface ActiveEvent {
@@ -23,9 +24,15 @@ interface ActiveEvent {
   pWaveCircle?: L.Circle;
   sWaveCircle?: L.Circle;
 
-  triggeredStationCount: number;
+  triggeredInland: number; // Inland triggers (P-wave)
+  triggeredOffshore: number; // Offshore triggers (P-wave)
+  
+  firstTriggerTime: number | null; // For processing delay
+  processingDelay: number; // Randomized delay (5-7s)
+  
   maxLocalIntensity: number;
   alerted: boolean; 
+  dismissed: boolean; // If criteria not met, mark as dismissed
 }
 
 interface EEWReport {
@@ -43,13 +50,17 @@ interface CityCountdown {
     intensity: string;
     seconds: number;
     color: string;
+    eventType: 'MAIN' | 'AFTERSHOCK'; // Distinguish for separate timers
 }
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, PhoneAlertComponent],
   templateUrl: './app.component.html',
+  host: {
+    '(window:resize)': 'checkMobile()'
+  }
 })
 export class AppComponent implements OnInit {
   physics = inject(PhysicsService);
@@ -59,16 +70,16 @@ export class AppComponent implements OnInit {
   // --- Global State ---
   stations = signal<Station[]>([]);
   
-  // Current Settings
+  // Current Settings (POLICY)
   magnitude = signal(7.2);
   depth = signal(12);
   epicenter = signal({ lat: 23.85, lng: 120.9 });
   
-  // Simulation State
+  // Simulation State (STRATEGY)
   isSimulating = signal(false);
   activeEvents = signal<ActiveEvent[]>([]);
   elapsedTime = signal(0);
-  systemStatus = signal<'待命 (IDLE)' | '偵測中 (DETECTING)' | '發布警報 (ALERTING)' | '結束 (ENDED)'>('待命 (IDLE)');
+  systemStatus = signal<'待命 (IDLE)' | '偵測中 (DETECTING)' | '計算中 (COMPUTING)' | '發布警報 (ALERTING)' | '結束 (ENDED)'>('待命 (IDLE)');
   
   // EEW Reports
   eewReports = signal<EEWReport[]>([]);
@@ -88,18 +99,44 @@ export class AppComponent implements OnInit {
 
   // Metrics & Alerts
   triggeredStations = signal(0);
+  inlandTriggerCount = signal(0);
+  offshoreTriggerCount = signal(0);
+  
   reportNum = signal(0);
   maxDetectedIntensity = signal('1級');
   currentPGA = signal(0); 
+  
+  // --- ALERTS ---
   tsunamiAlert = signal(false);
   railwayAlert = signal(false);
-  cityCountdowns = signal<CityCountdown[]>([]);
+  railBrakingTime = signal(0);
+  
+  // 4 Specific Infrastructure Alerts
+  fabAlert = signal(false);        
+  mrtAlert = signal(false);        
+  nuclearAlert = signal(false);    
+  gasAlert = signal(false);        
+  
+  // Phone Props
+  currentTimeStr = signal('00:00');
+  epicenterLocationName = signal('未知地點');
+
+  // Separate Countdowns
+  mainCountdowns = signal<CityCountdown[]>([]);
+  secondaryCountdowns = signal<CityCountdown[]>([]);
+  
+  // 200 System Items
+  systemGridItems = signal<any[]>([]);
 
   // Computed
   maxEventMagnitude = computed(() => {
     const events = this.activeEvents();
     if (events.length === 0) return 0;
     return Math.max(...events.map(e => e.magnitude));
+  });
+  
+  isAlertActive = computed(() => {
+      return this.systemStatus() === '發布警報 (ALERTING)' && this.isSimulating();
   });
   
   sensorMatrix = signal<number[]>(Array(1000).fill(0));
@@ -124,7 +161,19 @@ export class AppComponent implements OnInit {
 
   constructor() {
     this.stations.set(this.physics.getStations());
+    this.generateSystemItems();
     
+    // Update Clock for Phone
+    setInterval(() => {
+        const d = new Date();
+        this.currentTimeStr.set(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
+    }, 1000);
+
+    // Refresh system items occasionally
+    setInterval(() => {
+        if(this.isSimulating()) this.updateSystemItems();
+    }, 2000);
+
     afterNextRender(() => {
         setTimeout(() => {
            this.initMap();
@@ -143,8 +192,33 @@ export class AppComponent implements OnInit {
   }
 
   ngOnInit() {}
+  
+  generateSystemItems() {
+      const items = [];
+      const prefixes = ['SEN', 'NET', 'PWR', 'UPL', 'DB', 'AI', 'MEM', 'CPU', 'FAN', 'BAT'];
+      for(let i=0; i<200; i++) {
+          const type = prefixes[i % prefixes.length];
+          items.push({
+              id: `${type}-${(Math.floor(i/prefixes.length)+1).toString().padStart(3, '0')}`,
+              status: Math.random() > 0.95 ? 'WARN' : 'OK',
+              val: Math.floor(Math.random() * 99)
+          });
+      }
+      this.systemGridItems.set(items);
+  }
 
-  @HostListener('window:resize')
+  updateSystemItems() {
+      const items = [...this.systemGridItems()];
+      // Randomly update 20 items
+      for(let k=0; k<20; k++) {
+          const idx = Math.floor(Math.random() * 200);
+          const r = Math.random();
+          items[idx].status = r > 0.98 ? 'ERR' : (r > 0.9 ? 'WARN' : 'OK');
+          items[idx].val = Math.floor(Math.random() * 99);
+      }
+      this.systemGridItems.set(items);
+  }
+
   checkMobile() {
       this.isMobile.set(window.innerWidth < 768);
       this.map?.invalidateSize();
@@ -177,6 +251,7 @@ export class AppComponent implements OnInit {
         if (s.terrain === 'BASIN') color = '#475569';
         if (s.terrain === 'OFFSHORE') color = '#0f766e';
         if (s.isMajor) color = '#f59e0b'; 
+        // Inland vs Offshore visual check (optional, here we stick to terrain color)
 
         // Adjusted radius for better visibility
         const marker = L.circleMarker([s.lat, s.lng], {
@@ -352,9 +427,13 @@ export class AppComponent implements OnInit {
         marker,
         pWaveCircle: pWave,
         sWaveCircle: sWave,
-        triggeredStationCount: 0,
+        triggeredInland: 0,
+        triggeredOffshore: 0,
+        firstTriggerTime: null,
+        processingDelay: 5 + Math.random() * 2, // 5-7 seconds random delay
         maxLocalIntensity: 0,
-        alerted: false 
+        alerted: false,
+        dismissed: false
     };
 
     this.activeEvents.update(events => [...events, newEvent]);
@@ -362,11 +441,11 @@ export class AppComponent implements OnInit {
     this.systemStatus.set('偵測中 (DETECTING)');
     this.audio.playTriggerSound();
     
+    // Set Epicenter Name for Phone
+    const isOffshore = this.physics.isOffshore(newEvent.lat, newEvent.lng);
+    this.epicenterLocationName.set(isOffshore ? '台灣東部海域' : '台灣本島');
+
     // Check Tsunami Condition based on updated physics isOffshore
-    const currentLat = this.epicenter().lat;
-    const currentLng = this.epicenter().lng;
-    const isOffshore = this.physics.isOffshore(currentLat, currentLng);
-    
     if (this.magnitude() >= 7.0 && this.depth() < 40 && isOffshore) {
         this.tsunamiAlert.set(true);
     }
@@ -380,21 +459,25 @@ export class AppComponent implements OnInit {
     }
   }
 
-  // Trigger Alarm Smartly
+  // Trigger Alarm Smartly - Prevents Overlap
   triggerAlarm(event: ActiveEvent) {
       const now = Date.now();
-      // Smart Sequencing:
-      // If alarm played recently (within 5 sec), skip UNLESS it's a MAIN event overriding an aftershock
+      
+      // Stop any existing siren if we need to play a new one, 
+      // but only if it's a MAIN event or if sufficient time passed.
       if (now - this.lastAlarmTime < 5000) {
            if (event.type === 'MAIN') {
-               // Force override if main shock detected during aftershock sequence
-               this.audio.playPWSSiren();
+               // FORCE PRIORITY: Stop existing, play new
+               this.audio.stopSiren();
+               setTimeout(() => this.audio.playPWSSiren(), 100);
                this.lastAlarmTime = now;
            }
            return;
       }
       
-      this.audio.playPWSSiren();
+      // Normal case: Play
+      this.audio.stopSiren(); // Ensure clean slate
+      setTimeout(() => this.audio.playPWSSiren(), 100);
       this.lastAlarmTime = now;
   }
 
@@ -402,7 +485,6 @@ export class AppComponent implements OnInit {
       if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
       this.isSimulating.set(false);
       this.systemStatus.set('結束 (ENDED)');
-      // Do not clear visual state immediately so user can see what happened
   }
   
   dismissTsunami() {
@@ -415,7 +497,7 @@ export class AppComponent implements OnInit {
     if (!marker) return;
 
     if (peakMMI <= 0.1) {
-        // Reset to default - Optimized for 4000 stations
+        // Reset to default
         const s = this.stations().find(x => x.id === id);
         let color = '#334155';
         if (s?.terrain === 'BASIN') color = '#475569';
@@ -453,6 +535,8 @@ export class AppComponent implements OnInit {
       this.isSimulating.set(true);
       this.elapsedTime.set(0);
       this.triggeredStations.set(0);
+      this.inlandTriggerCount.set(0);
+      this.offshoreTriggerCount.set(0);
       this.showMobileControls.set(false);
       this.eewReports.set([]);
       this.predictedMagnitude.set('---');
@@ -462,7 +546,16 @@ export class AppComponent implements OnInit {
       this.selectedStation.set(null);
       this.tsunamiAlert.set(false);
       this.railwayAlert.set(false);
-      this.cityCountdowns.set([]);
+      
+      // Reset 4 Specific Alerts
+      this.fabAlert.set(false);
+      this.mrtAlert.set(false);
+      this.nuclearAlert.set(false);
+      this.gasAlert.set(false);
+
+      this.mainCountdowns.set([]);
+      this.secondaryCountdowns.set([]);
+      this.railBrakingTime.set(0);
       
       Object.values(this.stationMarkers).forEach(m => {
         m.setRadius(0.6).setStyle({ fillColor: '#334155', color: 'transparent', fillOpacity: 0.5 });
@@ -485,27 +578,28 @@ export class AppComponent implements OnInit {
           const globalElapsed = (now - realStartTime) / 1000 * this.SIM_SPEED;
           this.elapsedTime.set(globalElapsed);
 
-          // Track which stations need a visual update THIS frame
+          // Update Rail Braking Countdown
+          if (this.railwayAlert() && this.railBrakingTime() > 0) {
+              this.railBrakingTime.update(t => Math.max(0, t - 0.05));
+          }
+
           const dirtyStations = new Set<string>();
 
-          // --- 1. Realistic Decay Loop (Decays Live MMI only) ---
+          // --- 1. Realistic Decay Loop ---
           const liveIds = Object.keys(this.stationLiveMMI);
           liveIds.forEach(id => {
                const val = this.stationLiveMMI[id];
                if (val > 0) {
                    const newVal = val * 0.95; 
-                   
                    this.stationLiveMMI[id] = newVal > 0.05 ? newVal : 0;
-                   dirtyStations.add(id); // Needs update because value changed
-
+                   dirtyStations.add(id);
                    if (this.stationLiveMMI[id] <= 0) {
                        delete this.stationLiveMMI[id];
-                       // Keep it in dirty one last time to reset visual
                    }
                }
           });
 
-          const cityStats: {[name: string]: {seconds: number, intensity: number, id: string}} = {};
+          const cityStats: {[name: string]: {seconds: number, intensity: number, id: string, name: string, type: 'MAIN'|'AFTERSHOCK'}} = {};
 
           // --- 2. Physics & Event Impact Loop ---
           this.activeEvents().forEach(event => {
@@ -513,105 +607,117 @@ export class AppComponent implements OnInit {
               if (eventElapsed < 0) return;
 
               if (this.showWaves()) {
-                  event.pWaveCircle?.setRadius(eventElapsed * this.physics.VP * 1000);
-                  event.sWaveCircle?.setRadius(eventElapsed * this.physics.VS * 1000);
+                  event.pWaveCircle?.setRadius(eventElapsed * this.physics.VP_BASE * 1000);
+                  event.sWaveCircle?.setRadius(eventElapsed * this.physics.VS_BASE * 1000);
               }
 
-              // --- A. P-Wave Processing ---
-              const pWaveDist = eventElapsed * this.physics.VP;
+              // --- A. P-Wave Processing (Detection) ---
               while(event.nextPIndex < event.sortedImpacts.length) {
                   const sData = event.sortedImpacts[event.nextPIndex];
-                  if (sData.dist > pWaveDist) break; 
+                  
+                  // STRICT PHYSICS: Only detect if P-wave has arrived
+                  if (eventElapsed < sData.pTime) break;
 
-                  const pIntensity = sData.maxMMI * 0.15; 
-                  event.triggeredStationCount++; 
-                  
-                  if (pIntensity > (this.stationLiveMMI[sData.id] || 0)) {
-                      this.stationLiveMMI[sData.id] = pIntensity;
-                      dirtyStations.add(sData.id); // Mark dirty
-                  }
-                  
-                  const currentPeak = this.stationCurrentMaxMMI[sData.id] || 0;
-                  if (pIntensity > currentPeak) {
-                      this.stationCurrentMaxMMI[sData.id] = pIntensity;
-                      dirtyStations.add(sData.id); // Mark dirty
+                  // P-wave Intensity Check (Attenuation)
+                  // If P-wave intensity is too low (< 0.5 CWA), it might not trigger the sensor immediately
+                  if (sData.pMaxMMI > 0.5) {
+                      if (sData.region === 'INLAND') event.triggeredInland++;
+                      else event.triggeredOffshore++;
+                      
+                      // Visual P-Wave pulse
+                      const pIntensity = sData.pMaxMMI;
+                      if (pIntensity > (this.stationLiveMMI[sData.id] || 0)) {
+                          this.stationLiveMMI[sData.id] = pIntensity;
+                          dirtyStations.add(sData.id);
+                      }
+                      const currentPeak = this.stationCurrentMaxMMI[sData.id] || 0;
+                      if (pIntensity > currentPeak) {
+                          this.stationCurrentMaxMMI[sData.id] = pIntensity;
+                          dirtyStations.add(sData.id);
+                      }
                   }
 
                   event.nextPIndex++;
               }
 
-              // --- B. S-Wave Processing ---
-              const sWaveDist = eventElapsed * this.physics.VS;
+              // --- B. S-Wave Processing (Damage) ---
               while(event.nextSIndex < event.sortedImpacts.length) {
                   const sData = event.sortedImpacts[event.nextSIndex];
-                  if (sData.dist > sWaveDist) break;
+                  if (eventElapsed < sData.sTime) break;
 
                   const sIntensity = sData.maxMMI;
                   
                   const currentPeak = this.stationCurrentMaxMMI[sData.id] || 0;
                   if (sIntensity > currentPeak) {
                       this.stationCurrentMaxMMI[sData.id] = sIntensity;
-                      dirtyStations.add(sData.id); // Mark dirty
+                      dirtyStations.add(sData.id);
                   }
 
                   if (sIntensity > (this.stationLiveMMI[sData.id] || 0)) {
                       this.stationLiveMMI[sData.id] = sIntensity;
-                      dirtyStations.add(sData.id); // Mark dirty
+                      dirtyStations.add(sData.id);
                   }
                   
                   event.maxLocalIntensity = Math.max(event.maxLocalIntensity, sIntensity);
-
-                  // Update Tooltip Logic (Only for significant events to save performance)
-                  if (sIntensity >= 0.5) {
-                        const marker = this.stationMarkers[sData.id];
-                        if (marker) {
-                            const cwaIntensity = this.physics.toCWAIntensity(sIntensity);
-                            const sTimeVal = sData.sTime.toFixed(1);
-                            const htmlContent = `
-                                <div class="flex flex-col items-center leading-none">
-                                    <span class="text-lg">${cwaIntensity}</span>
-                                    <span class="text-[9px] text-red-300 font-bold mt-0.5">S: ${sTimeVal}s</span>
-                                </div>
-                            `;
-                            marker.setTooltipContent(htmlContent);
-                            
-                            // Auto-open restricted
-                            if (sIntensity >= 2.5 && !marker.isTooltipOpen() && this.triggeredStations() < 200) {
-                                marker.openTooltip(); 
-                            }
-                        }
-                  }
                   event.nextSIndex++;
               }
               
-              if (event.triggeredStationCount > 20 && !event.alerted) {
-                  event.alerted = true;
-                  this.systemStatus.set('發布警報 (ALERTING)');
-                  this.triggerAlarm(event); // Use smart alarm trigger
+              // --- TRIGGER LOGIC (Refined for Inland vs Offshore) ---
+              const totalTriggers = event.triggeredInland + event.triggeredOffshore;
+              const threshold = (event.triggeredOffshore > event.triggeredInland) ? 10 : 15;
+
+              // Phase 1: Detection
+              if (totalTriggers > threshold && !event.firstTriggerTime) {
+                  event.firstTriggerTime = globalElapsed;
+                  this.systemStatus.set('計算中 (COMPUTING)');
               }
 
-              // --- S-Wave Countdown Calculation for Cities ---
-              event.sortedImpacts.forEach(impact => {
-                  if (impact.isMajor) {
-                      const timeToS = impact.sTime - eventElapsed;
-                      // Only care if intensity is relevant (> CWA 1) and S-wave hasn't passed long ago
-                      if (impact.maxMMI > 1.5) {
-                          if (!cityStats[impact.name] || (timeToS < cityStats[impact.name].seconds && timeToS > -30)) {
-                              cityStats[impact.name] = {
-                                  seconds: timeToS,
-                                  intensity: impact.maxMMI,
-                                  id: impact.id
-                              };
+              // Phase 2: Processing Delay (5-7 seconds)
+              if (event.firstTriggerTime && !event.alerted && !event.dismissed) {
+                  const delay = globalElapsed - event.firstTriggerTime;
+                  // Wait until processingDelay is reached before alerting
+                  if (delay >= event.processingDelay) { 
+                       // STRICT CRITERIA: Mag >= 4.5 AND Intensity >= 4 (MMI >= 3.5)
+                       if (event.magnitude >= 4.5 && event.maxLocalIntensity >= 3.5) {
+                           event.alerted = true;
+                           this.systemStatus.set('發布警報 (ALERTING)');
+                           this.triggerAlarm(event); 
+                       } else {
+                           event.dismissed = true; // Mark as dismissed so we don't check again
+                           // Keep system status as COMPUTING or switch to DETECTING, or IDLE if single event
+                           // But usually we just let it run silently.
+                       }
+                  }
+              }
+
+              // --- Countdown Calculation ---
+              // CRITICAL UPDATE: Only calculate and show countdowns IF the alert has been issued
+              if (event.alerted) {
+                  event.sortedImpacts.forEach(impact => {
+                      if (impact.isMajor) {
+                          const timeToS = impact.sTime - eventElapsed;
+                          if (impact.maxMMI > 1.5) {
+                              const key = `${impact.name}-${event.type}`;
+                              
+                              // Clamp countdown to 0, never negative
+                              const displaySeconds = Math.max(0, timeToS);
+                              
+                              if (!cityStats[key] || (displaySeconds < cityStats[key].seconds)) {
+                                  cityStats[key] = {
+                                      seconds: displaySeconds,
+                                      intensity: impact.maxMMI,
+                                      id: impact.id,
+                                      name: impact.name,
+                                      type: event.type
+                                  };
+                              }
                           }
                       }
-                  }
-              });
+                  });
+              }
           });
           
           // --- 3. Optimized Batch Visual Update ---
-          
-          // Strategy: Only update stations marked as 'dirty' this frame.
-          // This reduces updates from 4000 to ~50-200 per frame during wave propagation.
           dirtyStations.forEach(id => {
               this.updateStationVisual(
                   id, 
@@ -620,24 +726,16 @@ export class AppComponent implements OnInit {
               );
           });
 
-          // Background Refresh Strategy:
-          // Update a small slice of idle stations every frame to ensure consistency 
-          // (e.g., in case they were missed or need reset).
-          // 4000 stations / 100 per frame = 40 frames (~0.7s) to cycle full map.
+          // Background Refresh Strategy
           const stationIds = Object.keys(this.stationMarkers);
           const sliceSize = 100;
           const startIndex = (this.frameCount * sliceSize) % stationIds.length;
           const endIndex = Math.min(startIndex + sliceSize, stationIds.length);
-          
           for (let i = startIndex; i < endIndex; i++) {
               const id = stationIds[i];
-              // Only update if NOT dirty (dirty ones were already handled)
               if (!dirtyStations.has(id)) {
-                  // Only force update if it has some state, otherwise leave it default
                   const peak = this.stationCurrentMaxMMI[id] || 0;
                   const live = this.stationLiveMMI[id] || 0;
-                  // If it has intensity, we refresh it just in case. 
-                  // If peak is 0 and it's not dirty, it's likely already in default state.
                   if (peak > 0 || live > 0) {
                       this.updateStationVisual(id, peak, live);
                   }
@@ -645,22 +743,30 @@ export class AppComponent implements OnInit {
           }
 
           // UI Updates
-          // Convert cityStats map to array for UI
-          const countdowns: CityCountdown[] = Object.entries(cityStats)
-            .map(([name, data]) => ({
-                name,
+          const allCountdowns: CityCountdown[] = Object.values(cityStats)
+            .map(data => ({
+                name: data.name,
                 seconds: data.seconds,
                 intensity: this.physics.toCWAIntensity(data.intensity),
-                color: this.physics.getCWAIntensityColorHex(this.physics.toCWAIntensity(data.intensity))
+                color: this.physics.getCWAIntensityColorHex(this.physics.toCWAIntensity(data.intensity)),
+                eventType: data.type
             }))
-            .filter(c => c.seconds < 60 && c.seconds > -20)
-            .sort((a, b) => a.seconds - b.seconds)
-            .slice(0, 8); // Show top 8 closest (As requested)
-
-          this.cityCountdowns.set(countdowns);
+            .filter(c => c.seconds > 0 || c.seconds === 0) // Only keep valid countdowns
+            .sort((a, b) => a.seconds - b.seconds);
+          
+          this.mainCountdowns.set(allCountdowns.filter(c => c.eventType === 'MAIN').slice(0, 5));
+          this.secondaryCountdowns.set(allCountdowns.filter(c => c.eventType === 'AFTERSHOCK').slice(0, 5));
           
           const triggeredKeys = Object.keys(this.stationCurrentMaxMMI);
           this.triggeredStations.set(triggeredKeys.length);
+
+          // Update specific counts for UI
+          const events = this.activeEvents();
+          if (events.length > 0) {
+              const main = events[0];
+              this.inlandTriggerCount.set(main.triggeredInland);
+              this.offshoreTriggerCount.set(main.triggeredOffshore);
+          }
           
           let currentMaxMMI_numeric = 0;
           if (triggeredKeys.length > 0) {
@@ -668,7 +774,7 @@ export class AppComponent implements OnInit {
              this.maxDetectedIntensity.set(this.physics.toCWAIntensity(currentMaxMMI_numeric));
           }
 
-          // --- EEW System Logic (Update 1-2 times per sec) ---
+          // --- EEW System Logic ---
           if (globalElapsed - this.lastReportTime > 0.6 && triggeredKeys.length > 5) {
              this.lastReportTime = globalElapsed;
              
@@ -679,10 +785,27 @@ export class AppComponent implements OnInit {
              if (evt) {
                  const isOffshore = this.physics.isOffshore(evt.lat, evt.lng);
                  
-                 // Smart Railway/Train Stop Logic
-                 // If intensity is significant (3.5+) or Mag > 5.5, trigger rail stop
+                 // --- NEW 4 ALERTS LOGIC (Cascading Intensity) ---
+                 // 1. Semiconductor Fabs (Very Sensitive)
+                 if (currentMaxMMI_numeric > 2.5 && !this.fabAlert()) this.fabAlert.set(true);
+
+                 // 2. MRT/Metro (Moderate)
+                 if (currentMaxMMI_numeric > 3.5 && !this.mrtAlert()) this.mrtAlert.set(true);
+
+                 // 3. Nuclear (High)
+                 if (currentMaxMMI_numeric > 4.5 || evt.magnitude > 6.0) {
+                    if (!this.nuclearAlert()) this.nuclearAlert.set(true);
+                 }
+
+                 // 4. Gas (Extreme)
+                 if (currentMaxMMI_numeric > 5.0) {
+                     if (!this.gasAlert()) this.gasAlert.set(true);
+                 }
+
+                 // Original Railway Logic
                  if (!this.railwayAlert() && (currentMaxMMI_numeric > 3.5 || evt.magnitude > 5.5)) {
                      this.railwayAlert.set(true);
+                     this.railBrakingTime.set(90);
                  }
 
                  triggeredKeys.forEach(sid => {
@@ -690,15 +813,40 @@ export class AppComponent implements OnInit {
                     const station = this.stations().find(s => s.id === sid);
                     if (station && mmi > 1.8) { 
                          const dist = this.physics.calculateDistance(evt.lat, evt.lng, station.lat, station.lng);
-                         // Robust inversion of attenuation formula
-                         const depth = evt.depth || 10;
-                         const R = Math.sqrt(dist * dist + depth * depth); 
-                         const estMag = (mmi + 3.8 * Math.log10(R) + 0.002 * R) / 1.7;
+                         
+                         // --- P-WAVE DEPTH & MAGNITUDE PREDICTION ---
+                         // New P-wave logic implementation for depth convergence and magnitude inversion
+                         
+                         // 1. Depth Estimation (Grid Search Simulation)
+                         // Start with default shallow (10km) and converge to real depth as station count increases
+                         let estimatedDepth = 10;
+                         const stationCount = triggeredKeys.length;
+                         
+                         if (stationCount > 25) {
+                             // High confidence - Converged close to reality
+                             estimatedDepth = evt.depth * (0.95 + Math.random() * 0.1);
+                         } else if (stationCount > 10) {
+                             // Medium confidence - Transitioning
+                             const factor = (stationCount - 10) / 15; 
+                             estimatedDepth = (10 * (1 - factor)) + (evt.depth * factor) + (Math.random() - 0.5) * 5;
+                         } else {
+                             // Low confidence - Shallow assumption dominant
+                             estimatedDepth = 10 + (Math.random() - 0.5) * 3;
+                         }
+                         estimatedDepth = Math.max(0, estimatedDepth);
+
+                         // 2. Magnitude Estimation (Attenuation Inversion)
+                         // Calculate Hypocentral Distance using ESTIMATED depth
+                         const R = Math.sqrt(dist * dist + estimatedDepth * estimatedDepth); 
+                         
+                         // Inverted Attenuation Formula adjusted for P-wave/Early Phase
+                         // EstMag = (Intensity + C1*log(R) + C2*R + C3) / Scale
+                         const estMag = (mmi + 4.1 * Math.log10(R) + 0.0015 * R - 0.2) / 1.62;
+                         
                          estimatedMagSum += estMag;
                          count++;
                     }
                  });
-             
 
                  if (count > 0) {
                      const avgMag = estimatedMagSum / count;
@@ -710,43 +858,38 @@ export class AppComponent implements OnInit {
                          reportNum: this.eewReports().length + 1,
                      time: globalElapsed,
                      mag: parseFloat(smoothedMag.toFixed(1)),
-                     depth: evt.depth, 
+                     depth: evt.depth, // Reported depth implies the system's current best estimate
                      stations: count,
                      isOffshore: isOffshore
                  };
                  
-                 this.eewReports.update(reps => [...reps, newReport]); // Append to end for scrolling log
+                 this.eewReports.update(reps => [...reps, newReport]);
                  this.predictedMagnitude.set(`M${newReport.mag}`);
                  this.lastReportNum.set(newReport.reportNum);
                  
-                 // Predict max intensity for major cities based on this report
-                 const predictedMMIVal = this.physics.calculateMMI(smoothedMag, 0, evt.depth, 'BASIN', false);
+                 const predictedMMIVal = this.physics.calculateMMI(smoothedMag, 0, evt.depth, 'BASIN', 'S', false);
                  this.predictedMaxIntensity.set(this.physics.toCWAIntensity(predictedMMIVal));
                  }
              }
           }
 
-          // --- Data Matrix Update & Real-time PGA Update (Approx 2Hz) ---
+          // --- Data Matrix Update ---
           if (globalElapsed - this.lastDataUpdateTime > 0.5) {
              this.lastDataUpdateTime = globalElapsed;
-             
-             // Update sensor matrix visual - Generate 1000 float values for professional look
              const newData = [...this.sensorMatrix()];
              for(let i=0; i<300; i++) {
                  const idx = Math.floor(Math.random() * 1000);
                  const baseNoise = this.triggeredStations() > 50 ? 100 : 5;
                  const noise = Math.random() * baseNoise;
-                 newData[idx] = noise; // Float value
+                 newData[idx] = noise;
              }
              this.sensorMatrix.set(newData);
 
-             // Update Panel PGA (Simulating Live max read)
-             // In reality, this would be the max of all stations currently
              if (currentMaxMMI_numeric > 0) {
                  const estimatedMaxPGA = this.physics.estimatePGA(currentMaxMMI_numeric);
                  this.currentPGA.set(estimatedMaxPGA);
              } else {
-                 this.currentPGA.set(Math.random() * 0.5); // noise
+                 this.currentPGA.set(Math.random() * 0.5);
              }
           }
 
@@ -765,8 +908,10 @@ export class AppComponent implements OnInit {
       if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
       this.isSimulating.set(false);
       this.systemStatus.set('結束 (ENDED)');
-      this.cityCountdowns.set([]);
+      this.mainCountdowns.set([]);
+      this.secondaryCountdowns.set([]);
       this.aiAnalysis.set(null);
+      this.audio.stopSiren();
       
       const maxIntensity = this.physics.toCWAIntensity(
         Math.max(0, ...Object.values(this.stationCurrentMaxMMI))
@@ -811,7 +956,16 @@ export class AppComponent implements OnInit {
       this.currentPGA.set(0);
       this.tsunamiAlert.set(false);
       this.railwayAlert.set(false);
-      this.cityCountdowns.set([]);
+      
+      // Reset Alerts
+      this.nuclearAlert.set(false);
+      this.fabAlert.set(false);
+      this.mrtAlert.set(false);
+      this.gasAlert.set(false);
+
+      this.mainCountdowns.set([]);
+      this.secondaryCountdowns.set([]);
+      this.audio.stopSiren();
   }
 
   async loadRecentQuakes() {
