@@ -441,11 +441,12 @@ export class AppComponent implements OnInit {
     this.systemStatus.set('偵測中 (DETECTING)');
     this.audio.playTriggerSound();
     
-    // Set Epicenter Name for Phone
-    const isOffshore = this.physics.isOffshore(newEvent.lat, newEvent.lng);
-    this.epicenterLocationName.set(isOffshore ? '台灣東部海域' : '台灣本島');
+    // Set Epicenter Name for Phone (Updated to use Physics Regions)
+    const regionName = this.physics.getRegionName(newEvent.lat, newEvent.lng);
+    this.epicenterLocationName.set(regionName);
 
     // Check Tsunami Condition based on updated physics isOffshore
+    const isOffshore = this.physics.isOffshore(newEvent.lat, newEvent.lng);
     if (this.magnitude() >= 7.0 && this.depth() < 40 && isOffshore) {
         this.tsunamiAlert.set(true);
     }

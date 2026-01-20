@@ -74,6 +74,7 @@ export class GeminiService {
             thinkingConfig: {
                 thinkingBudget: 32768
             }
+            // maxOutputTokens is intentionally omitted as per requirement
         }
       });
       return response.text || 'AI 思考中斷。';
@@ -82,5 +83,50 @@ export class GeminiService {
       // Fallback if 3-pro is not available in current env
       return '高階思考模型暫時無法連接。';
     }
+  }
+
+  // Video Understanding
+  async analyzeVideo(videoDataBase64: string, prompt: string): Promise<string> {
+    try {
+      const response = await this.ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: [
+            {
+                role: 'user',
+                parts: [
+                    { inlineData: { data: videoDataBase64, mimeType: 'video/mp4' } },
+                    { text: prompt }
+                ]
+            }
+        ]
+      });
+      return response.text || '無法分析影片。';
+    } catch (e) {
+      console.error('Gemini Video Analysis Error', e);
+      return '影片分析服務暫時無法使用。';
+    }
+  }
+
+  // Maps Grounding
+  async findNearbyPlaces(lat: number, lng: number, type: string = 'hospital'): Promise<string> {
+      try {
+          const response = await this.ai.models.generateContent({
+              model: 'gemini-2.5-flash',
+              contents: `Find ${type}s near latitude ${lat}, longitude ${lng} in Taiwan/Japan region. List the top 3 results with their names and estimated distance.`,
+              config: {
+                  tools: [{ googleMaps: {} }]
+              }
+          });
+          
+          // Google Maps tool returns groundingMetadata
+          const grounding = response.candidates?.[0]?.groundingMetadata;
+          if (grounding && grounding.groundingChunks) {
+              return response.text || '已找到相關地點數據。';
+          }
+          return response.text || '未找到附近地點。';
+      } catch (e) {
+          console.error('Gemini Maps Error', e);
+          return '地圖服務暫時無法使用。';
+      }
   }
 }

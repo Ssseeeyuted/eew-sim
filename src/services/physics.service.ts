@@ -187,6 +187,7 @@ export class PhysicsService {
     
     if (waveType === 'S') {
         // S-wave: Standard CWA/MMI attenuation
+        // Modified constants for sharper falloff offshore vs inland
         baseI = 1.65 * mag - 4.2 * Math.log10(R < 5 ? 5 : R) - 0.003 * R;
     } else {
         // P-wave: Weaker, decays faster, but arrives first
@@ -194,12 +195,12 @@ export class PhysicsService {
         baseI = 1.4 * mag - 4.8 * Math.log10(R < 5 ? 5 : R) - 0.006 * R;
     }
 
-    // Site Effects (Terrain Amplification)
+    // Site Effects (Terrain Amplification) - Enhanced for better regional fidelity
     let siteAmp = 0;
-    if (terrain === 'BASIN') siteAmp = 1.1; 
+    if (terrain === 'BASIN') siteAmp = 1.2; // Taipei Basin effect stronger
     if (terrain === 'PLAIN') siteAmp = 0.4;
-    if (terrain === 'MOUNTAIN') siteAmp = -0.6; 
-    if (terrain === 'OFFSHORE') siteAmp = -0.9; 
+    if (terrain === 'MOUNTAIN') siteAmp = -0.7; // Hard rock attenuation
+    if (terrain === 'OFFSHORE') siteAmp = -1.1; // Seafloor absorption/distance perception
 
     let final = baseI + siteAmp;
     
@@ -265,5 +266,19 @@ export class PhysicsService {
     }
     if (lat > 41.5 && lat < 45.5 && lng > 139.5 && lng < 146.0) return false;
     return true; 
+  }
+  
+  getRegionName(lat: number, lng: number): string {
+    // Rough bounding boxes for display
+    if (lat >= 21.0 && lat <= 26.0 && lng >= 119.0 && lng <= 123.0) return '台灣地區 (Taiwan Region)';
+    if (lat >= 24.0 && lat <= 30.0 && lng >= 123.0 && lng <= 130.0) return '琉球群島 (Ryukyu Islands)';
+    if (lat >= 30.0 && lat <= 35.0 && lng >= 128.0 && lng <= 132.0) return '日本九州 (Kyushu, Japan)';
+    if (lat >= 33.0 && lat <= 36.0 && lng >= 132.0 && lng <= 136.0) return '日本西本州 (W. Honshu, Japan)';
+    if (lat >= 35.0 && lat <= 42.0 && lng >= 136.0 && lng <= 142.0) return '日本東本州 (E. Honshu, Japan)';
+    if (lat >= 41.0 && lng >= 139.0) return '日本北海道 (Hokkaido, Japan)';
+    
+    // Fallbacks
+    if (lat > 30) return '日本海域 (Japan Region)';
+    return '西太平洋海域 (W. Pacific)';
   }
 }
