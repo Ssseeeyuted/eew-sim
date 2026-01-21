@@ -65,7 +65,7 @@
             @if (mainCountdowns().length > 0) {
                  <div class="bg-slate-950 border border-slate-700 rounded p-3 space-y-2 animate-in slide-in-from-left duration-300">
                     <div class="text-[10px] text-red-500 font-bold uppercase flex justify-between border-b border-red-900/50 pb-1">
-                         <span>主震抵達倒數 (MAIN SHOCK)</span>
+                         <span>主震/火山 抵達倒數 (MAIN/VOLCANO)</span>
                          <span class="animate-pulse">⚠ CRITICAL</span>
                     </div>
                     <div class="space-y-2 max-h-48 overflow-y-auto">
@@ -153,6 +153,26 @@
                 </div>
             </div>
 
+            <!-- Image Analysis -->
+            <div class="space-y-2 pt-2 border-t border-slate-800">
+                <div class="text-[10px] text-slate-500 font-bold uppercase">災情照片分析 (Gemini Vision)</div>
+                <div class="flex gap-2">
+                    <input type="file" #fileInput (change)="handleImageUpload($event)" class="hidden" accept="image/*">
+                    <button (click)="fileInput.click()" class="flex-1 bg-slate-800 hover:bg-slate-700 p-2 rounded text-xs text-slate-300 border border-slate-700 flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M20.4 14.5L16 10 4 20"/></svg>
+                        上傳照片
+                    </button>
+                </div>
+                @if (analyzingImage()) {
+                    <div class="text-xs text-blue-400 animate-pulse">正在分析影像中... (Thinking)</div>
+                }
+                @if (imageAnalysisResult()) {
+                    <div class="bg-slate-800/50 p-2 rounded text-[10px] text-slate-300 max-h-32 overflow-y-auto whitespace-pre-wrap border border-slate-700">
+                        {{imageAnalysisResult()}}
+                    </div>
+                }
+            </div>
+
             <!-- Parameters -->
             <div class="space-y-3 pt-4 border-t border-slate-800">
                 <div class="flex justify-between items-center">
@@ -194,6 +214,14 @@
                     } @else {
                     <span>啟動模擬序列 (Start)</span>
                     }
+                </button>
+                
+                <!-- NEW: Volcano Simulation Button -->
+                <button 
+                    (click)="spawnCompositeDisaster()"
+                    class="w-full py-3 rounded font-bold text-sm tracking-widest uppercase transition-all shadow-lg flex items-center justify-center gap-2 border border-transparent bg-orange-900/80 hover:bg-orange-800 text-white shadow-orange-900/30 border-orange-500"
+                >
+                    <span>🌋 複合式災害 (Composite Disaster)</span>
                 </button>
                 
                 @if (isSimulating()) {
@@ -240,6 +268,14 @@
                                 <input type="checkbox" [checked]="showStations()" (change)="toggleShowStations()" class="accent-blue-500">
                             </label>
                             <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:bg-slate-900 p-2 rounded border border-slate-800/50">
+                                <span class="text-cyan-400">海嘯浮標 (Tsunami Buoys)</span>
+                                <input type="checkbox" [checked]="showTsunamiStations()" (change)="toggleTsunamiStations()" class="accent-cyan-500">
+                            </label>
+                            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:bg-slate-900 p-2 rounded border border-slate-800/50">
+                                <span class="text-orange-500">火山監測 (Volcano Sensors)</span>
+                                <input type="checkbox" [checked]="showVolcanoStations()" (change)="toggleVolcanoStations()" class="accent-orange-500">
+                            </label>
+                            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:bg-slate-900 p-2 rounded border border-slate-800/50">
                                 <span>地震波前 (Wavefronts)</span>
                                 <input type="checkbox" [checked]="showWaves()" (change)="toggleShowWaves()" class="accent-blue-500">
                             </label>
@@ -256,6 +292,7 @@
                                     <div>ID: {{selectedStation().id}}</div>
                                     <div>地質: {{selectedStation().terrain}}</div>
                                     <div>區域: {{selectedStation().region}}</div>
+                                    <div>類型: {{selectedStation().stationType}}</div>
                                     
                                     @if (selectedStation().intensity) {
                                         <div class="col-span-2 mt-2 pt-2 border-t border-slate-800 grid grid-cols-2 gap-2">
@@ -383,7 +420,7 @@
         <!-- Mobile FAB to toggle controls -->
         <button 
            (click)="toggleMobileControls()"
-           class="md:hidden absolute bottom-6 right-6 z-[400] bg-slate-800 text-white p-4 rounded-full shadow-2xl border border-slate-700 active:scale-95 transition-transform"
+           class="md:hidden absolute bottom-6 left-6 z-[400] bg-slate-800 text-white p-4 rounded-full shadow-2xl border border-slate-700 active:scale-95 transition-transform"
            [class.translate-y-24]="showMobileControls()"
         >
            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -391,94 +428,6 @@
         
         <!-- ALERT STACK CONTAINER -->
         <div class="absolute top-4 left-4 right-4 z-[450] flex flex-col gap-2 pointer-events-none md:w-96 md:left-auto md:right-4 md:top-4 max-h-[90vh] overflow-y-auto no-scrollbar">
-
-            <!-- 1. NUCLEAR ALERT -->
-            @if (nuclearAlert()) {
-                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
-                    <div class="bg-purple-700 text-white p-2 shadow-lg flex items-center justify-between gap-2 border-l-4 border-yellow-400 rounded">
-                        <div class="flex items-center gap-2">
-                             <span class="text-xl">☢️</span>
-                             <div class="leading-none">
-                                <h2 class="text-sm font-black uppercase tracking-wider">核電廠緊急停機</h2>
-                                <p class="text-[9px] text-white/80">NPP EMERGENCY SCRAM</p>
-                             </div>
-                        </div>
-                    </div>
-                </div>
-            }
-
-            <!-- 2. FAB ALERT -->
-            @if (fabAlert()) {
-                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
-                    <div class="bg-cyan-800 text-white p-2 shadow-lg flex items-center justify-between gap-2 border-l-4 border-cyan-400 rounded">
-                        <div class="flex items-center gap-2">
-                             <span class="text-xl">🏭</span>
-                             <div class="leading-none">
-                                <h2 class="text-sm font-black uppercase tracking-wider">晶圓廠自動減震</h2>
-                                <p class="text-[9px] text-white/80">FAB VIBRATION CONTROL</p>
-                             </div>
-                        </div>
-                    </div>
-                </div>
-            }
-
-            <!-- 3. MRT ALERT -->
-            @if (mrtAlert()) {
-                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
-                    <div class="bg-blue-800 text-white p-2 shadow-lg flex items-center justify-between gap-2 border-l-4 border-white rounded">
-                        <div class="flex items-center gap-2">
-                             <span class="text-xl">🚇</span>
-                             <div class="leading-none">
-                                <h2 class="text-sm font-black uppercase tracking-wider">捷運慢速行駛</h2>
-                                <p class="text-[9px] text-white/80">MRT SLOWDOWN / HALT</p>
-                             </div>
-                        </div>
-                    </div>
-                </div>
-            }
-
-            <!-- 4. GAS ALERT -->
-            @if (gasAlert()) {
-                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
-                    <div class="bg-orange-700 text-white p-2 shadow-lg flex items-center justify-between gap-2 border-l-4 border-red-500 rounded">
-                        <div class="flex items-center gap-2">
-                             <span class="text-xl">🔥</span>
-                             <div class="leading-none">
-                                <h2 class="text-sm font-black uppercase tracking-wider">瓦斯管線遮斷</h2>
-                                <p class="text-[9px] text-white/80">GAS AUTO-SHUTOFF</p>
-                             </div>
-                        </div>
-                    </div>
-                </div>
-            }
-
-            <!-- RAILWAY EMERGENCY STOP BANNER (Original) -->
-            @if (railwayAlert()) {
-                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
-                    <div class="bg-orange-600 text-white p-3 shadow-[0_0_20px_rgba(234,88,12,0.6)] flex items-center justify-between gap-4 border-l-8 border-blue-600 rounded-r-lg">
-                         <div class="flex items-center gap-3">
-                             <div class="bg-white text-orange-600 p-1 rounded font-black text-xs uppercase tracking-tighter flex flex-col items-center leading-none">
-                                <span>RAIL</span>
-                                <span>STOP</span>
-                             </div>
-                            <div>
-                                <h2 class="text-lg font-black uppercase tracking-widest leading-none">列車緊急停駛</h2>
-                                <p class="text-[10px] text-white/90 mt-0.5">SHINKANSEN / THSR EMERGENCY BRAKE</p>
-                                <div class="flex gap-4 mt-2 border-t border-white/20 pt-1">
-                                    <div class="flex flex-col">
-                                        <span class="text-[9px] opacity-75 uppercase">Est. Stop Time</span>
-                                        <span class="text-sm font-mono font-bold">{{railBrakingTime().toFixed(1)}}s</span>
-                                    </div>
-                                     <div class="flex flex-col">
-                                        <span class="text-[9px] opacity-75 uppercase">Affected Area</span>
-                                        <span class="text-sm font-mono font-bold">ALL LINES</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            }
 
             <!-- TSUNAMI WARNING BANNER (Original) -->
             @if (tsunamiAlert()) {
@@ -494,6 +443,22 @@
                         <button (click)="dismissTsunami()" class="text-white/80 hover:text-white p-1">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
+                    </div>
+                </div>
+            }
+            
+            <!-- VOLCANO WARNING BANNER -->
+            @if (volcanoAlert()) {
+                <div class="animate-in slide-in-from-top-5 duration-500 pointer-events-auto">
+                    <div class="bg-orange-600 text-white p-3 shadow-[0_0_30px_rgba(249,115,22,0.6)] flex items-center justify-between gap-4 border-y-4 border-black rounded-lg">
+                        <div class="flex items-center gap-3">
+                             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-pulse shrink-0"><path d="m8 2 4 4 4-4"/><path d="M12 6v8"/><path d="m16 10-4 4-4-4"/><path d="M4 14.8C2.8 15.5 2 16.5 2 18a4 4 0 0 0 4 4h12a4 4 0 0 0 4-4c0-1.5-.8-2.5-2-3.2"/></svg>
+                            <div>
+                                <h2 class="text-xl font-black uppercase tracking-widest leading-none">火山噴發警報</h2>
+                                <p class="text-[10px] font-bold bg-black text-orange-500 px-1 mt-1 inline-block">ERUPTION DETECTED</p>
+                            </div>
+                        </div>
+                        <!-- Auto dismisses or manual close -->
                     </div>
                 </div>
             }
@@ -536,25 +501,48 @@
             }
         </div>
         
-        <!-- PHONE SIMULATION (Fixed Bottom-Right) -->
-        <!-- Logic: Always visible if simulating, but transforms based on state -->
-        <div class="fixed bottom-4 right-4 z-[9999] flex items-end justify-end pointer-events-none" 
-             [class.hidden]="!isSimulating()">
-            <div class="pointer-events-auto transform transition-all duration-500 origin-bottom-right"
-                 [class.scale-75]="!isAlertActive()"
-                 [class.opacity-80]="!isAlertActive()"
-                 [class.scale-100]="isAlertActive()"
-                 [class.opacity-100]="isAlertActive()"
-                 [class.-translate-y-8]="isAlertActive()"
-                 [class.-translate-x-8]="isAlertActive()">
-                <app-phone-alert 
-                    [active]="isAlertActive()"
-                    [time]="currentTimeStr()"
-                    [location]="epicenterLocationName()"
-                    [magnitude]="predictedMagnitude()"
-                    [intensity]="maxDetectedIntensity()"
-                ></app-phone-alert>
+        <!-- PHONE SIMULATION (Toggleable, No Zoom) -->
+        <div class="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2 pointer-events-none" [class.hidden]="!isSimulating()">
+            
+            <!-- Phone Container -->
+            <div class="transition-all duration-500 origin-bottom-right transform will-change-transform"
+                [class.translate-y-[120%]]="!isPhoneOpen()"
+                [class.opacity-0]="!isPhoneOpen()"
+                [class.translate-y-0]="isPhoneOpen()"
+                [class.opacity-100]="isPhoneOpen()">
+                <!-- Scale adjustments to fit screen -->
+                <div class="pointer-events-auto transform scale-[0.6] sm:scale-75 md:scale-90 lg:scale-100 origin-bottom-right transition-transform duration-300">
+                    <app-phone-alert 
+                        [active]="isAlertActive()"
+                        [time]="currentTimeStr()"
+                        [location]="epicenterLocationName()"
+                        [magnitude]="predictedMagnitude()"
+                        [intensity]="maxDetectedIntensity()"
+                        [tsunami]="tsunamiAlert()"
+                        [volcano]="volcanoAlert()"
+                    ></app-phone-alert>
+                </div>
             </div>
+
+            <!-- Toggle Button (Always visible if simulating) -->
+            <button (click)="togglePhone()" 
+                    class="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-white p-3 rounded-full shadow-lg border border-slate-600 transition-all active:scale-95 flex items-center justify-center gap-2 group">
+                @if (isPhoneOpen()) {
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    <span class="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-300 text-xs font-bold whitespace-nowrap pl-0 group-hover:pl-2">Hide Phone</span>
+                } @else {
+                    <div class="relative">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+                        @if (systemStatus() === '發布警報 (ALERTING)') {
+                            <span class="absolute -top-1 -right-1 flex h-3 w-3">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+                            </span>
+                        }
+                    </div>
+                    <span class="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-300 text-xs font-bold whitespace-nowrap pl-0 group-hover:pl-2">Show Phone</span>
+                }
+            </button>
         </div>
 
         <!-- END REPORT DIALOG -->

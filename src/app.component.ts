@@ -8,7 +8,7 @@ import * as L from 'leaflet';
 
 interface ActiveEvent {
   id: string;
-  type: 'MAIN' | 'AFTERSHOCK'; 
+  type: 'MAIN' | 'AFTERSHOCK' | 'VOLCANO'; 
   magnitude: number;
   depth: number;
   lat: number;
@@ -23,16 +23,23 @@ interface ActiveEvent {
   marker?: L.Marker;
   pWaveCircle?: L.Circle;
   sWaveCircle?: L.Circle;
+  ashCircle?: L.Circle; // New Ash Cloud Visual
 
-  triggeredInland: number; // Inland triggers (P-wave)
-  triggeredOffshore: number; // Offshore triggers (P-wave)
+  triggeredInland: number;
+  triggeredOffshore: number;
   
-  firstTriggerTime: number | null; // For processing delay
-  processingDelay: number; // Randomized delay (5-7s)
+  firstTriggerTime: number | null; 
+  processingDelay: number; 
   
   maxLocalIntensity: number;
+  
   alerted: boolean; 
-  dismissed: boolean; // If criteria not met, mark as dismissed
+  alertTime: number | null; 
+  dismissed: boolean; 
+  
+  tsunamiRisk: boolean; 
+  tsunamiAlerted: boolean; 
+  tsunamiDelay: number; 
 }
 
 interface EEWReport {
@@ -50,7 +57,7 @@ interface CityCountdown {
     intensity: string;
     seconds: number;
     color: string;
-    eventType: 'MAIN' | 'AFTERSHOCK'; // Distinguish for separate timers
+    eventType: 'MAIN' | 'AFTERSHOCK' | 'VOLCANO'; 
 }
 
 @Component({
@@ -90,12 +97,17 @@ export class AppComponent implements OnInit {
   // UI State
   showTools = signal(false);
   showStations = signal(true);
+  showTsunamiStations = signal(true);
+  showVolcanoStations = signal(true);
   showWaves = signal(true);
   isMuted = signal(false);
   activeTab = signal('Visual');
   showMobileControls = signal(false); 
   isMobile = signal(false);
   selectedStation = signal<any>(null); 
+
+  // Phone Simulator UI State
+  isPhoneOpen = signal(true);
 
   // Metrics & Alerts
   triggeredStations = signal(0);
@@ -108,14 +120,7 @@ export class AppComponent implements OnInit {
   
   // --- ALERTS ---
   tsunamiAlert = signal(false);
-  railwayAlert = signal(false);
-  railBrakingTime = signal(0);
-  
-  // 4 Specific Infrastructure Alerts
-  fabAlert = signal(false);        
-  mrtAlert = signal(false);        
-  nuclearAlert = signal(false);    
-  gasAlert = signal(false);        
+  volcanoAlert = signal(false);
   
   // Phone Props
   currentTimeStr = signal('00:00');
@@ -136,13 +141,22 @@ export class AppComponent implements OnInit {
   });
   
   isAlertActive = computed(() => {
-      return this.systemStatus() === '發布警報 (ALERTING)' && this.isSimulating();
+      // Trigger phone popup for ANY active alert state
+      return (
+          this.systemStatus() === '發布警報 (ALERTING)' || 
+          this.tsunamiAlert() || 
+          this.volcanoAlert()
+      ) && this.isSimulating();
   });
   
   sensorMatrix = signal<number[]>(Array(1000).fill(0));
   recentQuakes = signal<any[]>([]);
   isLoadingRecents = signal(false);
   aiAnalysis = signal<string | null>(null);
+  
+  // Image Analysis
+  analyzingImage = signal(false);
+  imageAnalysisResult = signal<string | null>(null);
 
   Math = Math;
 
@@ -150,7 +164,12 @@ export class AppComponent implements OnInit {
   private stationMarkers: {[id: string]: L.CircleMarker} = {}; 
   private stationCurrentMaxMMI: {[id: string]: number} = {}; 
   private stationLiveMMI: {[id: string]: number} = {}; 
+  private stationAshState: {[id: string]: boolean} = {};
+  private stationTypeMap: {[id: string]: 'SEISMIC' | 'TSUNAMI' | 'VOLCANO'} = {};
   
+  // Sensor Simulation Mapping
+  private sensorStationMap: number[] = []; // Maps sensor Index (0-999) to a random Station Index
+
   private epicenterCursor: L.Marker | undefined;
   private animFrameId: number | null = null;
   private SIM_SPEED = 1.0; 
@@ -163,13 +182,19 @@ export class AppComponent implements OnInit {
     this.stations.set(this.physics.getStations());
     this.generateSystemItems();
     
-    // Update Clock for Phone
+    // Initialize Sensor Map
+    const stationCount = this.stations().length;
+    if (stationCount > 0) {
+        for(let i=0; i<1000; i++) {
+            this.sensorStationMap[i] = Math.floor(Math.random() * stationCount);
+        }
+    }
+    
     setInterval(() => {
         const d = new Date();
         this.currentTimeStr.set(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`);
     }, 1000);
 
-    // Refresh system items occasionally
     setInterval(() => {
         if(this.isSimulating()) this.updateSystemItems();
     }, 2000);
@@ -183,10 +208,21 @@ export class AppComponent implements OnInit {
 
     effect(() => {
         if (!this.map) return;
-        const visible = this.showStations();
-        Object.values(this.stationMarkers).forEach(m => {
-            if(visible) m.addTo(this.map!);
-            else m.remove();
+        const seismicVisible = this.showStations();
+        const tsunamiVisible = this.showTsunamiStations();
+        const volcanoVisible = this.showVolcanoStations();
+
+        Object.keys(this.stationMarkers).forEach(id => {
+            const marker = this.stationMarkers[id];
+            const type = this.stationTypeMap[id];
+            
+            let shouldShow = false;
+            if (type === 'SEISMIC' && seismicVisible) shouldShow = true;
+            if (type === 'TSUNAMI' && tsunamiVisible) shouldShow = true;
+            if (type === 'VOLCANO' && volcanoVisible) shouldShow = true;
+
+            if(shouldShow) marker.addTo(this.map!);
+            else marker.remove();
         });
     });
   }
@@ -209,7 +245,6 @@ export class AppComponent implements OnInit {
 
   updateSystemItems() {
       const items = [...this.systemGridItems()];
-      // Randomly update 20 items
       for(let k=0; k<20; k++) {
           const idx = Math.floor(Math.random() * 200);
           const r = Math.random();
@@ -223,43 +258,67 @@ export class AppComponent implements OnInit {
       this.isMobile.set(window.innerWidth < 768);
       this.map?.invalidateSize();
   }
+  
+  togglePhone() {
+      this.isPhoneOpen.update(v => !v);
+  }
+
+  toggleTsunamiStations() { this.showTsunamiStations.update(v => !v); }
+  toggleVolcanoStations() { this.showVolcanoStations.update(v => !v); }
 
   private initMap() {
     if (this.map) return;
     
-    // Zoom out to see Taiwan AND Japan (Okinawa/Mainland)
     this.map = L.map('map-container', {
         zoomControl: false,
         attributionControl: false,
         preferCanvas: true, 
         fadeAnimation: false 
-    }).setView([26.0, 124.0], 5); // Center between Taiwan and Okinawa
+    }).setView([26.0, 124.0], 5);
 
     this.map.invalidateSize();
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         maxZoom: 19,
-        attribution: '&copy; OSM'
+        attribution: '&copy; OSM & CartoDB'
     }).addTo(this.map);
 
-    // CRITICAL PERFORMANCE FIX: Use Canvas Renderer explicitly
     const myRenderer = L.canvas({ padding: 0.5 });
 
-    // Init Stations
     this.stations().forEach(s => {
         let color = '#334155';
-        if (s.terrain === 'BASIN') color = '#475569';
-        if (s.terrain === 'OFFSHORE') color = '#0f766e';
-        if (s.isMajor) color = '#f59e0b'; 
-        // Inland vs Offshore visual check (optional, here we stick to terrain color)
+        let radius = 0.6;
+        let opacity = 0.6;
+        let weight = 0;
+        let strokeColor = 'transparent';
 
-        // Adjusted radius for better visibility
+        if (s.stationType === 'SEISMIC') {
+            if (s.terrain === 'BASIN') color = '#475569';
+            if (s.terrain === 'OFFSHORE') color = '#0f766e';
+            if (s.isMajor) {
+                color = '#f59e0b';
+                radius = 3;
+                opacity = 0.9;
+            }
+        } else if (s.stationType === 'TSUNAMI') {
+            color = 'transparent'; 
+            strokeColor = '#0891b2'; 
+            weight = 1;
+            radius = 1.5;
+            opacity = 0.8;
+        } else if (s.stationType === 'VOLCANO') {
+            color = '#f97316'; 
+            radius = 2.0;
+            opacity = 1.0;
+        }
+
         const marker = L.circleMarker([s.lat, s.lng], {
-            radius: s.isMajor ? 3 : 0.6, 
+            radius: radius, 
             fillColor: color,
-            color: 'transparent',
-            fillOpacity: s.isMajor ? 0.9 : 0.6,
-            renderer: myRenderer // USE EXPLICIT CANVAS RENDERER
+            color: strokeColor,
+            weight: weight,
+            fillOpacity: opacity,
+            renderer: myRenderer
         }).addTo(this.map!);
         
         marker.bindTooltip('', { 
@@ -270,16 +329,14 @@ export class AppComponent implements OnInit {
             className: 'intensity-tooltip' 
         });
 
-        // Add Click Interaction with Professional Data Calculation
         marker.on('click', () => {
             let dynamicData: any = {};
             const events = this.activeEvents();
             
-            // Default "Noise" values if no event
             let displayPGA = Math.random() * 0.5;
             let displayPGV = Math.random() * 0.01;
 
-            if (events.length > 0) {
+            if (events.length > 0 && s.stationType === 'SEISMIC') {
                 let maxMMI = -1;
                 let bestImpact = null;
                 
@@ -306,7 +363,6 @@ export class AppComponent implements OnInit {
                     };
                 }
             } else {
-                // Background noise level
                 dynamicData = {
                     pga: displayPGA,
                     pgv: displayPGV
@@ -320,6 +376,7 @@ export class AppComponent implements OnInit {
         });
 
         this.stationMarkers[s.id] = marker;
+        this.stationTypeMap[s.id] = s.stationType;
         this.stationCurrentMaxMMI[s.id] = 0;
     });
 
@@ -386,40 +443,75 @@ export class AppComponent implements OnInit {
 
   // --- Multi-Event Simulation Logic ---
   spawnEarthquake() {
+      this.startEvent(this.epicenter(), this.magnitude(), this.depth(), 'MAIN');
+  }
+
+  spawnCompositeDisaster() {
+      const volStations = this.stations().filter(s => s.stationType === 'VOLCANO');
+      if (volStations.length === 0) return;
+      const targetVolcano = volStations[Math.floor(Math.random() * volStations.length)];
+      
+      this.startEvent({ lat: targetVolcano.lat, lng: targetVolcano.lng }, 6.0, 1, 'VOLCANO');
+
+      const quakeLoc = { 
+          lat: targetVolcano.lat + (Math.random() > 0.5 ? 0.5 : -0.5), 
+          lng: targetVolcano.lng + (Math.random() > 0.5 ? 0.5 : -0.5) 
+      };
+      
+      setTimeout(() => {
+          if (this.isSimulating()) {
+              this.startEvent(quakeLoc, 7.8, 25, 'MAIN');
+          }
+      }, 5000); 
+  }
+
+  private startEvent(loc: {lat: number, lng: number}, mag: number, depth: number, type: 'MAIN'|'AFTERSHOCK'|'VOLCANO') {
     if (!this.map || this.stations().length === 0) return;
     
-    const eventId = `EQ-${Date.now()}`;
+    const eventId = `EVT-${Date.now()}-${Math.random()}`; 
     const startT = this.isSimulating() ? this.elapsedTime() : 0;
     
-    const type = this.activeEvents().length === 0 ? 'MAIN' : 'AFTERSHOCK';
-
     const sortedImpacts = this.physics.calculateEventImpacts(
         this.stations(), 
-        this.epicenter(), 
-        this.magnitude(), 
-        this.depth()
+        loc, 
+        mag, 
+        depth
     );
 
-    const pWave = L.circle(this.epicenter(), { radius: 0, color: '#fbbf24', fill: false, weight: 1, dashArray: '4,4' }).addTo(this.map);
-    const sWave = L.circle(this.epicenter(), { radius: 0, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 0.1, weight: 2 }).addTo(this.map);
+    const pWave = L.circle(loc, { radius: 0, color: '#fbbf24', fill: false, weight: 1, dashArray: '4,4' }).addTo(this.map);
+    const sWave = L.circle(loc, { radius: 0, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 0.1, weight: 2 }).addTo(this.map);
     
-    const marker = L.marker(this.epicenter(), {
+    let ashCircle: L.Circle | undefined;
+    if (type === 'VOLCANO') {
+        ashCircle = L.circle(loc, { 
+            radius: 0, 
+            color: 'transparent', 
+            fillColor: '#555555', 
+            fillOpacity: 0.4, 
+            weight: 0 
+        }).addTo(this.map);
+    }
+    
+    const marker = L.marker(loc, {
          icon: L.divIcon({
             className: 'quake-marker',
-            html: `<div class="animate-ping-slow" style="width:20px;height:20px;background:transparent;border:2px solid red;border-radius:50%;"></div>
-                   <div style="position:absolute;top:6px;left:6px;width:8px;height:8px;background:red;border-radius:50%;"></div>`,
+            html: `<div class="animate-ping-slow" style="width:20px;height:20px;background:transparent;border:2px solid ${type==='VOLCANO'?'orange':'red'};border-radius:50%;"></div>
+                   <div style="position:absolute;top:6px;left:6px;width:8px;height:8px;background:${type==='VOLCANO'?'orange':'red'};border-radius:50%;"></div>`,
             iconSize: [20, 20],
             iconAnchor: [10, 10]
          })
     }).addTo(this.map);
 
+    const isOffshore = this.physics.isOffshore(loc.lat, loc.lng);
+    const hasTsunamiRisk = mag >= 7.0 && depth < 35 && isOffshore;
+
     const newEvent: ActiveEvent = {
         id: eventId,
         type: type, 
-        magnitude: this.magnitude(),
-        depth: this.depth(),
-        lat: this.epicenter().lat,
-        lng: this.epicenter().lng,
+        magnitude: mag,
+        depth: depth,
+        lat: loc.lat,
+        lng: loc.lng,
         startTime: startT,
         sortedImpacts: sortedImpacts,
         nextPIndex: 0,
@@ -427,13 +519,18 @@ export class AppComponent implements OnInit {
         marker,
         pWaveCircle: pWave,
         sWaveCircle: sWave,
+        ashCircle: ashCircle,
         triggeredInland: 0,
         triggeredOffshore: 0,
         firstTriggerTime: null,
-        processingDelay: 5 + Math.random() * 2, // 5-7 seconds random delay
+        processingDelay: 5 + Math.random() * 2,
         maxLocalIntensity: 0,
         alerted: false,
-        dismissed: false
+        alertTime: null,
+        dismissed: false,
+        tsunamiRisk: hasTsunamiRisk,
+        tsunamiAlerted: false,
+        tsunamiDelay: 8 + Math.random() * 2 
     };
 
     this.activeEvents.update(events => [...events, newEvent]);
@@ -441,45 +538,40 @@ export class AppComponent implements OnInit {
     this.systemStatus.set('偵測中 (DETECTING)');
     this.audio.playTriggerSound();
     
-    // Set Epicenter Name for Phone (Updated to use Physics Regions)
-    const regionName = this.physics.getRegionName(newEvent.lat, newEvent.lng);
-    this.epicenterLocationName.set(regionName);
-
-    // Check Tsunami Condition based on updated physics isOffshore
-    const isOffshore = this.physics.isOffshore(newEvent.lat, newEvent.lng);
-    if (this.magnitude() >= 7.0 && this.depth() < 40 && isOffshore) {
-        this.tsunamiAlert.set(true);
+    if (type === 'MAIN' || this.activeEvents().length === 1) {
+        const regionName = this.physics.getRegionName(newEvent.lat, newEvent.lng);
+        this.epicenterLocationName.set(regionName);
+        this.epicenter.set({ lat: loc.lat, lng: loc.lng }); 
+        this.epicenterCursor?.setLatLng(this.epicenter());
     }
-
-    // Move cursor slightly to simulate variation/chaos
-    this.epicenter.update(c => ({ lat: c.lat + (Math.random()-0.5)*0.05, lng: c.lng + (Math.random()-0.5)*0.05 }));
-    this.epicenterCursor?.setLatLng(this.epicenter());
 
     if (!this.isSimulating()) {
         this.startSimulationLoop();
     }
   }
 
-  // Trigger Alarm Smartly - Prevents Overlap
   triggerAlarm(event: ActiveEvent) {
       const now = Date.now();
       
-      // Stop any existing siren if we need to play a new one, 
-      // but only if it's a MAIN event or if sufficient time passed.
+      if (this.volcanoAlert() && event.type !== 'VOLCANO') {
+          console.log('Suppressed Alert due to Volcano Priority');
+          return;
+      }
+
       if (now - this.lastAlarmTime < 5000) {
-           if (event.type === 'MAIN') {
-               // FORCE PRIORITY: Stop existing, play new
+           if (event.type === 'MAIN' || event.type === 'VOLCANO' || event.tsunamiAlerted) {
                this.audio.stopSiren();
                setTimeout(() => this.audio.playPWSSiren(), 100);
                this.lastAlarmTime = now;
+               this.isPhoneOpen.set(true); 
            }
            return;
       }
       
-      // Normal case: Play
-      this.audio.stopSiren(); // Ensure clean slate
+      this.audio.stopSiren(); 
       setTimeout(() => this.audio.playPWSSiren(), 100);
       this.lastAlarmTime = now;
+      this.isPhoneOpen.set(true); 
   }
 
   emergencyStop() {
@@ -492,43 +584,95 @@ export class AppComponent implements OnInit {
       this.tsunamiAlert.set(false);
   }
 
-  // --- Optimized Visual Helper ---
   updateStationVisual(id: string, peakMMI: number, liveMMI: number) {
     const marker = this.stationMarkers[id];
     if (!marker) return;
 
-    if (peakMMI <= 0.1) {
-        // Reset to default
-        const s = this.stations().find(x => x.id === id);
-        let color = '#334155';
-        if (s?.terrain === 'BASIN') color = '#475569';
-        if (s?.terrain === 'OFFSHORE') color = '#0f766e';
-        if (s?.isMajor) color = '#f59e0b';
-        
+    if (this.stationAshState[id]) {
         marker.setStyle({
-            radius: s?.isMajor ? 3 : 0.6, 
-            fillColor: color,
-            color: 'transparent',
-            fillOpacity: s?.isMajor ? 0.9 : 0.6,
-            weight: 0
+            fillColor: '#555555', 
+            color: '#aaaaaa',
+            radius: 4,
+            fillOpacity: 0.9,
+            weight: 1
         });
+        return;
+    }
+
+    if (peakMMI <= 0.1 && liveMMI <= 0) {
+        const type = this.stationTypeMap[id];
+        if (type === 'SEISMIC') {
+            const s = this.stations().find(x => x.id === id);
+            let color = '#334155';
+            if (s?.terrain === 'BASIN') color = '#475569';
+            if (s?.terrain === 'OFFSHORE') color = '#0f766e';
+            if (s?.isMajor) color = '#f59e0b';
+            
+            marker.setStyle({
+                radius: s?.isMajor ? 3 : 0.6, 
+                fillColor: color,
+                color: 'transparent',
+                fillOpacity: s?.isMajor ? 0.9 : 0.6,
+                weight: 0
+            });
+        } else if (type === 'TSUNAMI') {
+            marker.setStyle({
+                radius: 1.5,
+                fillColor: 'transparent',
+                color: '#0891b2', 
+                weight: 1,
+                fillOpacity: 0.8
+            });
+        } else if (type === 'VOLCANO') {
+             marker.setStyle({
+                radius: 2.0,
+                fillColor: '#f97316',
+                color: 'transparent',
+                weight: 0,
+                fillOpacity: 1.0
+            });
+        }
         if (marker.isTooltipOpen()) marker.closeTooltip();
     } else {
-        const cwaIntensity = this.physics.toCWAIntensity(peakMMI);
-        const color = this.physics.getCWAIntensityColorHex(cwaIntensity);
-        const isMajor = this.stations().find(x => x.id === id)?.isMajor;
+        const type = this.stationTypeMap[id];
         
-        const damageSize = peakMMI > 2.5 ? 2.0 : 0; 
-        const pulseSize = liveMMI > 0 ? (liveMMI * 0.6 + 1.5) : 0; 
-        const baseSize = isMajor ? 6 : 1.5;
-        
-        marker.setStyle({
-            fillColor: color,
-            radius: Math.max(baseSize + damageSize, pulseSize), 
-            fillOpacity: 0.9,
-            color: 'white',
-            weight: 0.5
-        });
+        if (type === 'SEISMIC') {
+            const cwaIntensity = this.physics.toCWAIntensity(peakMMI);
+            const color = this.physics.getCWAIntensityColorHex(cwaIntensity);
+            const isMajor = this.stations().find(x => x.id === id)?.isMajor;
+            
+            const damageSize = peakMMI > 2.5 ? 2.0 : 0; 
+            const pulseSize = liveMMI > 0 ? (liveMMI * 0.6 + 1.5) : 0; 
+            const baseSize = isMajor ? 6 : 1.5;
+            
+            marker.setStyle({
+                fillColor: color,
+                radius: Math.max(baseSize + damageSize, pulseSize), 
+                fillOpacity: 0.9,
+                color: 'white',
+                weight: 0.5
+            });
+        } else if (type === 'TSUNAMI') {
+            const simulatedHeight = liveMMI * 2.0; 
+            const color = this.physics.getTsunamiColor(simulatedHeight);
+            
+            marker.setStyle({
+                radius: 2.5 + simulatedHeight,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.7,
+                weight: 1
+            });
+        } else if (type === 'VOLCANO') {
+             const pulse = liveMMI > 0 ? (liveMMI + 3) : 2;
+             marker.setStyle({
+                radius: pulse,
+                fillColor: '#ef4444', 
+                color: '#f97316', 
+                weight: 2,
+                fillOpacity: 1.0
+            });
+        }
     }
   }
 
@@ -546,21 +690,15 @@ export class AppComponent implements OnInit {
       this.currentPGA.set(0);
       this.selectedStation.set(null);
       this.tsunamiAlert.set(false);
-      this.railwayAlert.set(false);
+      this.volcanoAlert.set(false);
+      this.isPhoneOpen.set(true);
       
-      // Reset 4 Specific Alerts
-      this.fabAlert.set(false);
-      this.mrtAlert.set(false);
-      this.nuclearAlert.set(false);
-      this.gasAlert.set(false);
-
       this.mainCountdowns.set([]);
       this.secondaryCountdowns.set([]);
-      this.railBrakingTime.set(0);
       
-      Object.values(this.stationMarkers).forEach(m => {
-        m.setRadius(0.6).setStyle({ fillColor: '#334155', color: 'transparent', fillOpacity: 0.5 });
-        if (m.isTooltipOpen()) m.closeTooltip();
+      Object.keys(this.stationMarkers).forEach(id => {
+         this.stationAshState[id] = false; 
+         this.updateStationVisual(id, 0, 0); 
       });
       this.stationCurrentMaxMMI = {};
       this.stationLiveMMI = {};
@@ -579,19 +717,15 @@ export class AppComponent implements OnInit {
           const globalElapsed = (now - realStartTime) / 1000 * this.SIM_SPEED;
           this.elapsedTime.set(globalElapsed);
 
-          // Update Rail Braking Countdown
-          if (this.railwayAlert() && this.railBrakingTime() > 0) {
-              this.railBrakingTime.update(t => Math.max(0, t - 0.05));
-          }
-
           const dirtyStations = new Set<string>();
 
-          // --- 1. Realistic Decay Loop ---
           const liveIds = Object.keys(this.stationLiveMMI);
           liveIds.forEach(id => {
                const val = this.stationLiveMMI[id];
                if (val > 0) {
-                   const newVal = val * 0.95; 
+                   const type = this.stationTypeMap[id];
+                   const decay = type === 'TSUNAMI' ? 0.99 : 0.95; 
+                   const newVal = val * decay; 
                    this.stationLiveMMI[id] = newVal > 0.05 ? newVal : 0;
                    dirtyStations.add(id);
                    if (this.stationLiveMMI[id] <= 0) {
@@ -600,9 +734,8 @@ export class AppComponent implements OnInit {
                }
           });
 
-          const cityStats: {[name: string]: {seconds: number, intensity: number, id: string, name: string, type: 'MAIN'|'AFTERSHOCK'}} = {};
+          const cityStats: {[name: string]: {seconds: number, intensity: number, id: string, name: string, type: 'MAIN'|'AFTERSHOCK'|'VOLCANO'}} = {};
 
-          // --- 2. Physics & Event Impact Loop ---
           this.activeEvents().forEach(event => {
               const eventElapsed = globalElapsed - event.startTime;
               if (eventElapsed < 0) return;
@@ -610,22 +743,33 @@ export class AppComponent implements OnInit {
               if (this.showWaves()) {
                   event.pWaveCircle?.setRadius(eventElapsed * this.physics.VP_BASE * 1000);
                   event.sWaveCircle?.setRadius(eventElapsed * this.physics.VS_BASE * 1000);
+                  
+                  if (event.type === 'VOLCANO' && event.ashCircle) {
+                      event.ashCircle.setRadius(eventElapsed * this.physics.ASH_SPEED_KM_S * 1000);
+                  }
               }
 
-              // --- A. P-Wave Processing (Detection) ---
+              if (event.type === 'VOLCANO') {
+                  event.sortedImpacts.forEach(impact => {
+                      if (impact.ashTime && eventElapsed >= impact.ashTime) {
+                          if (!this.stationAshState[impact.id]) {
+                              this.stationAshState[impact.id] = true;
+                              dirtyStations.add(impact.id);
+                          }
+                      }
+                  });
+              }
+
               while(event.nextPIndex < event.sortedImpacts.length) {
                   const sData = event.sortedImpacts[event.nextPIndex];
-                  
-                  // STRICT PHYSICS: Only detect if P-wave has arrived
                   if (eventElapsed < sData.pTime) break;
 
-                  // P-wave Intensity Check (Attenuation)
-                  // If P-wave intensity is too low (< 0.5 CWA), it might not trigger the sensor immediately
                   if (sData.pMaxMMI > 0.5) {
                       if (sData.region === 'INLAND') event.triggeredInland++;
                       else event.triggeredOffshore++;
                       
-                      // Visual P-Wave pulse
+                      event.maxLocalIntensity = Math.max(event.maxLocalIntensity, sData.pMaxMMI);
+
                       const pIntensity = sData.pMaxMMI;
                       if (pIntensity > (this.stationLiveMMI[sData.id] || 0)) {
                           this.stationLiveMMI[sData.id] = pIntensity;
@@ -637,11 +781,9 @@ export class AppComponent implements OnInit {
                           dirtyStations.add(sData.id);
                       }
                   }
-
                   event.nextPIndex++;
               }
 
-              // --- B. S-Wave Processing (Damage) ---
               while(event.nextSIndex < event.sortedImpacts.length) {
                   const sData = event.sortedImpacts[event.nextSIndex];
                   if (eventElapsed < sData.sTime) break;
@@ -663,46 +805,77 @@ export class AppComponent implements OnInit {
                   event.nextSIndex++;
               }
               
-              // --- TRIGGER LOGIC (Refined for Inland vs Offshore) ---
               const totalTriggers = event.triggeredInland + event.triggeredOffshore;
               const threshold = (event.triggeredOffshore > event.triggeredInland) ? 10 : 15;
 
-              // Phase 1: Detection
               if (totalTriggers > threshold && !event.firstTriggerTime) {
                   event.firstTriggerTime = globalElapsed;
                   this.systemStatus.set('計算中 (COMPUTING)');
               }
 
-              // Phase 2: Processing Delay (5-7 seconds)
               if (event.firstTriggerTime && !event.alerted && !event.dismissed) {
                   const delay = globalElapsed - event.firstTriggerTime;
-                  // Wait until processingDelay is reached before alerting
                   if (delay >= event.processingDelay) { 
-                       // STRICT CRITERIA: Mag >= 4.5 AND Intensity >= 4 (MMI >= 3.5)
-                       if (event.magnitude >= 4.5 && event.maxLocalIntensity >= 3.5) {
+                       const highMagnitude = event.magnitude >= 5.0;
+                       const moderateMagWithShaking = event.magnitude >= 4.0 && event.maxLocalIntensity >= 1.5;
+                       const isVolcano = event.type === 'VOLCANO';
+                       
+                       if (event.tsunamiRisk || highMagnitude || moderateMagWithShaking || isVolcano) {
                            event.alerted = true;
+                           event.alertTime = globalElapsed;
                            this.systemStatus.set('發布警報 (ALERTING)');
+                           
+                           if (isVolcano) {
+                               this.volcanoAlert.set(true);
+                           }
+                           
                            this.triggerAlarm(event); 
                        } else {
-                           event.dismissed = true; // Mark as dismissed so we don't check again
-                           // Keep system status as COMPUTING or switch to DETECTING, or IDLE if single event
-                           // But usually we just let it run silently.
+                           event.dismissed = true;
                        }
                   }
               }
 
-              // --- Countdown Calculation ---
-              // CRITICAL UPDATE: Only calculate and show countdowns IF the alert has been issued
+              if (event.alerted && event.tsunamiRisk && !event.tsunamiAlerted) {
+                  if (event.alertTime) {
+                      if (globalElapsed - event.alertTime >= event.tsunamiDelay) {
+                          event.tsunamiAlerted = true;
+                          if (!this.volcanoAlert()) {
+                              this.tsunamiAlert.set(true);
+                          }
+                          this.triggerAlarm(event); 
+                      }
+                      
+                      if (globalElapsed - event.alertTime >= 2 && globalElapsed - event.alertTime < 30) {
+                         const nearbyTsunamiStns = this.stations()
+                             .filter(s => s.stationType === 'TSUNAMI')
+                             .filter(s => {
+                                 const dist = this.physics.calculateDistance(event.lat, event.lng, s.lat, s.lng);
+                                 return dist < 800; 
+                             });
+                             
+                         nearbyTsunamiStns.forEach(s => {
+                             const dist = this.physics.calculateDistance(event.lat, event.lng, s.lat, s.lng);
+                             const waveHeight = this.physics.calculateTsunamiHeight(event.magnitude, dist, event.depth);
+                             const visualVal = waveHeight * 0.5; 
+                             
+                             const current = this.stationLiveMMI[s.id] || 0;
+                             if (current < visualVal) {
+                                 this.stationLiveMMI[s.id] = current + (visualVal - current) * 0.1;
+                                 dirtyStations.add(s.id);
+                             }
+                         });
+                      }
+                  }
+              }
+
               if (event.alerted) {
                   event.sortedImpacts.forEach(impact => {
                       if (impact.isMajor) {
                           const timeToS = impact.sTime - eventElapsed;
                           if (impact.maxMMI > 1.5) {
                               const key = `${impact.name}-${event.type}`;
-                              
-                              // Clamp countdown to 0, never negative
                               const displaySeconds = Math.max(0, timeToS);
-                              
                               if (!cityStats[key] || (displaySeconds < cityStats[key].seconds)) {
                                   cityStats[key] = {
                                       seconds: displaySeconds,
@@ -718,7 +891,6 @@ export class AppComponent implements OnInit {
               }
           });
           
-          // --- 3. Optimized Batch Visual Update ---
           dirtyStations.forEach(id => {
               this.updateStationVisual(
                   id, 
@@ -727,7 +899,6 @@ export class AppComponent implements OnInit {
               );
           });
 
-          // Background Refresh Strategy
           const stationIds = Object.keys(this.stationMarkers);
           const sliceSize = 100;
           const startIndex = (this.frameCount * sliceSize) % stationIds.length;
@@ -737,13 +908,12 @@ export class AppComponent implements OnInit {
               if (!dirtyStations.has(id)) {
                   const peak = this.stationCurrentMaxMMI[id] || 0;
                   const live = this.stationLiveMMI[id] || 0;
-                  if (peak > 0 || live > 0) {
+                  if (peak > 0 || live > 0 || this.stationAshState[id]) {
                       this.updateStationVisual(id, peak, live);
                   }
               }
           }
 
-          // UI Updates
           const allCountdowns: CityCountdown[] = Object.values(cityStats)
             .map(data => ({
                 name: data.name,
@@ -752,16 +922,15 @@ export class AppComponent implements OnInit {
                 color: this.physics.getCWAIntensityColorHex(this.physics.toCWAIntensity(data.intensity)),
                 eventType: data.type
             }))
-            .filter(c => c.seconds > 0 || c.seconds === 0) // Only keep valid countdowns
+            .filter(c => c.seconds > 0 || c.seconds === 0) 
             .sort((a, b) => a.seconds - b.seconds);
           
-          this.mainCountdowns.set(allCountdowns.filter(c => c.eventType === 'MAIN').slice(0, 5));
+          this.mainCountdowns.set(allCountdowns.filter(c => c.eventType === 'MAIN' || c.eventType === 'VOLCANO').slice(0, 5));
           this.secondaryCountdowns.set(allCountdowns.filter(c => c.eventType === 'AFTERSHOCK').slice(0, 5));
           
           const triggeredKeys = Object.keys(this.stationCurrentMaxMMI);
           this.triggeredStations.set(triggeredKeys.length);
 
-          // Update specific counts for UI
           const events = this.activeEvents();
           if (events.length > 0) {
               const main = events[0];
@@ -775,7 +944,6 @@ export class AppComponent implements OnInit {
              this.maxDetectedIntensity.set(this.physics.toCWAIntensity(currentMaxMMI_numeric));
           }
 
-          // --- EEW System Logic ---
           if (globalElapsed - this.lastReportTime > 0.6 && triggeredKeys.length > 5) {
              this.lastReportTime = globalElapsed;
              
@@ -786,62 +954,29 @@ export class AppComponent implements OnInit {
              if (evt) {
                  const isOffshore = this.physics.isOffshore(evt.lat, evt.lng);
                  
-                 // --- NEW 4 ALERTS LOGIC (Cascading Intensity) ---
-                 // 1. Semiconductor Fabs (Very Sensitive)
-                 if (currentMaxMMI_numeric > 2.5 && !this.fabAlert()) this.fabAlert.set(true);
-
-                 // 2. MRT/Metro (Moderate)
-                 if (currentMaxMMI_numeric > 3.5 && !this.mrtAlert()) this.mrtAlert.set(true);
-
-                 // 3. Nuclear (High)
-                 if (currentMaxMMI_numeric > 4.5 || evt.magnitude > 6.0) {
-                    if (!this.nuclearAlert()) this.nuclearAlert.set(true);
-                 }
-
-                 // 4. Gas (Extreme)
-                 if (currentMaxMMI_numeric > 5.0) {
-                     if (!this.gasAlert()) this.gasAlert.set(true);
-                 }
-
-                 // Original Railway Logic
-                 if (!this.railwayAlert() && (currentMaxMMI_numeric > 3.5 || evt.magnitude > 5.5)) {
-                     this.railwayAlert.set(true);
-                     this.railBrakingTime.set(90);
-                 }
-
                  triggeredKeys.forEach(sid => {
                     const mmi = this.stationCurrentMaxMMI[sid];
                     const station = this.stations().find(s => s.id === sid);
-                    if (station && mmi > 1.8) { 
+                    
+                    if (station && station.stationType === 'SEISMIC' && mmi > 1.8) { 
                          const dist = this.physics.calculateDistance(evt.lat, evt.lng, station.lat, station.lng);
                          
-                         // --- P-WAVE DEPTH & MAGNITUDE PREDICTION ---
-                         // New P-wave logic implementation for depth convergence and magnitude inversion
-                         
-                         // 1. Depth Estimation (Grid Search Simulation)
-                         // Start with default shallow (10km) and converge to real depth as station count increases
-                         let estimatedDepth = 10;
                          const stationCount = triggeredKeys.length;
+                         const noiseFactor = Math.max(0.1, 5.0 / Math.sqrt(stationCount)); 
+                         const noise = (Math.random() - 0.5) * noiseFactor;
                          
-                         if (stationCount > 25) {
-                             // High confidence - Converged close to reality
-                             estimatedDepth = evt.depth * (0.95 + Math.random() * 0.1);
+                         let estimatedDepth = 10;
+                         if (stationCount > 40) {
+                             estimatedDepth = evt.depth + noise; 
                          } else if (stationCount > 10) {
-                             // Medium confidence - Transitioning
-                             const factor = (stationCount - 10) / 15; 
-                             estimatedDepth = (10 * (1 - factor)) + (evt.depth * factor) + (Math.random() - 0.5) * 5;
+                             const factor = (stationCount - 10) / 30; 
+                             estimatedDepth = (10 * (1 - factor)) + (evt.depth * factor) + noise * 2;
                          } else {
-                             // Low confidence - Shallow assumption dominant
-                             estimatedDepth = 10 + (Math.random() - 0.5) * 3;
+                             estimatedDepth = 10 + noise * 5; 
                          }
                          estimatedDepth = Math.max(0, estimatedDepth);
 
-                         // 2. Magnitude Estimation (Attenuation Inversion)
-                         // Calculate Hypocentral Distance using ESTIMATED depth
                          const R = Math.sqrt(dist * dist + estimatedDepth * estimatedDepth); 
-                         
-                         // Inverted Attenuation Formula adjusted for P-wave/Early Phase
-                         // EstMag = (Intensity + C1*log(R) + C2*R + C3) / Scale
                          const estMag = (mmi + 4.1 * Math.log10(R) + 0.0015 * R - 0.2) / 1.62;
                          
                          estimatedMagSum += estMag;
@@ -851,15 +986,14 @@ export class AppComponent implements OnInit {
 
                  if (count > 0) {
                      const avgMag = estimatedMagSum / count;
-                     const trustFactor = Math.min(count / 15, 0.95); 
-                     const smoothedMag = avgMag * trustFactor + (evt.magnitude || 0) * (1 - trustFactor);
+                     const smoothedMag = avgMag; 
                      
                      const newReport: EEWReport = {
                          id: `REP-${Date.now()}`,
                          reportNum: this.eewReports().length + 1,
                      time: globalElapsed,
                      mag: parseFloat(smoothedMag.toFixed(1)),
-                     depth: evt.depth, // Reported depth implies the system's current best estimate
+                     depth: evt.depth, 
                      stations: count,
                      isOffshore: isOffshore
                  };
@@ -874,15 +1008,27 @@ export class AppComponent implements OnInit {
              }
           }
 
-          // --- Data Matrix Update ---
-          if (globalElapsed - this.lastDataUpdateTime > 0.5) {
+          if (globalElapsed - this.lastDataUpdateTime > 0.1) { 
              this.lastDataUpdateTime = globalElapsed;
              const newData = [...this.sensorMatrix()];
-             for(let i=0; i<300; i++) {
-                 const idx = Math.floor(Math.random() * 1000);
-                 const baseNoise = this.triggeredStations() > 50 ? 100 : 5;
-                 const noise = Math.random() * baseNoise;
-                 newData[idx] = noise;
+             
+             const stationsList = this.stations();
+             
+             for(let i=0; i<1000; i++) {
+                 if (this.sensorStationMap[i] !== undefined) {
+                     const stationIdx = this.sensorStationMap[i];
+                     const station = stationsList[stationIdx];
+                     if (station) {
+                         const liveVal = this.stationLiveMMI[station.id] || 0;
+                         const noise = Math.random() * 5;
+                         const signal = liveVal * 20; 
+                         newData[i] = Math.max(0, signal + noise);
+                     } else {
+                         newData[i] = Math.random() * 2;
+                     }
+                 } else {
+                     newData[i] = Math.random() * 2;
+                 }
              }
              this.sensorMatrix.set(newData);
 
@@ -936,6 +1082,7 @@ export class AppComponent implements OnInit {
           e.marker?.remove();
           e.pWaveCircle?.remove();
           e.sWaveCircle?.remove();
+          e.ashCircle?.remove(); 
       });
       this.activeEvents.set([]);
       
@@ -943,10 +1090,13 @@ export class AppComponent implements OnInit {
       this.elapsedTime.set(0);
       this.showMobileControls.set(false);
       this.selectedStation.set(null);
+      this.isPhoneOpen.set(true); 
       
-      Object.values(this.stationMarkers).forEach(m => {
-        m.setRadius(0.6).setStyle({ fillColor: '#334155', color: 'transparent', fillOpacity: 0.5 });
-        if(m.isTooltipOpen()) m.closeTooltip();
+      this.stationAshState = {}; 
+      Object.keys(this.stationMarkers).forEach(id => {
+        this.updateStationVisual(id, 0, 0);
+        const marker = this.stationMarkers[id];
+        if(marker.isTooltipOpen()) marker.closeTooltip();
       });
       
       this.stationCurrentMaxMMI = {};
@@ -956,17 +1106,12 @@ export class AppComponent implements OnInit {
       this.predictedMaxIntensity.set('---');
       this.currentPGA.set(0);
       this.tsunamiAlert.set(false);
-      this.railwayAlert.set(false);
+      this.volcanoAlert.set(false);
       
-      // Reset Alerts
-      this.nuclearAlert.set(false);
-      this.fabAlert.set(false);
-      this.mrtAlert.set(false);
-      this.gasAlert.set(false);
-
       this.mainCountdowns.set([]);
       this.secondaryCountdowns.set([]);
       this.audio.stopSiren();
+      this.imageAnalysisResult.set(null);
   }
 
   async loadRecentQuakes() {
@@ -976,5 +1121,22 @@ export class AppComponent implements OnInit {
         this.recentQuakes.set(quakes);
     }
     this.isLoadingRecents.set(false);
+  }
+
+  async handleImageUpload(event: Event) {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      this.analyzingImage.set(true);
+      this.imageAnalysisResult.set(null);
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+          const base64 = (e.target?.result as string).split(',')[1];
+          const result = await this.gemini.analyzeImage(base64);
+          this.imageAnalysisResult.set(result);
+          this.analyzingImage.set(false);
+      };
+      reader.readAsDataURL(file);
   }
 }

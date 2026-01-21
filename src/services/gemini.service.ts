@@ -50,12 +50,12 @@ export class GeminiService {
   }
 
   // Thinking Mode for complex multi-event scenarios
+  // Requirement: gemini-3-pro-preview + thinkingBudget 32768
   async analyzeComplexScenario(events: any[]): Promise<string> {
     try {
       const eventDesc = events.map((e, i) => `事件${i+1}: 規模${e.magnitude}, 深度${e.depth}km, 位置(${e.lat.toFixed(2)}, ${e.lng.toFixed(2)})`).join('\n');
       
       const response = await this.ai.models.generateContent({
-        // Requirement: use gemini-3-pro-preview and thinkingBudget 32768
         model: 'gemini-3-pro-preview', 
         contents: `深度思考模式啟動。
         
@@ -74,37 +74,40 @@ export class GeminiService {
             thinkingConfig: {
                 thinkingBudget: 32768
             }
-            // maxOutputTokens is intentionally omitted as per requirement
         }
       });
       return response.text || 'AI 思考中斷。';
     } catch (e) {
       console.error('Gemini Thinking Error', e);
-      // Fallback if 3-pro is not available in current env
       return '高階思考模型暫時無法連接。';
     }
   }
 
-  // Video Understanding
-  async analyzeVideo(videoDataBase64: string, prompt: string): Promise<string> {
-    try {
-      const response = await this.ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: [
-            {
-                role: 'user',
-                parts: [
-                    { inlineData: { data: videoDataBase64, mimeType: 'video/mp4' } },
-                    { text: prompt }
-                ]
-            }
-        ]
-      });
-      return response.text || '無法分析影片。';
-    } catch (e) {
-      console.error('Gemini Video Analysis Error', e);
-      return '影片分析服務暫時無法使用。';
-    }
+  // Image Analysis for Disaster Photos
+  async analyzeImage(base64Image: string): Promise<string> {
+      try {
+          const response = await this.ai.models.generateContent({
+              model: 'gemini-3-pro-preview',
+              contents: [
+                  {
+                      role: 'user',
+                      parts: [
+                          { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+                          { text: '這是一張災情照片。請分析照片中的損害情況（建築、道路、基礎設施），評估危險等級，並給出即時的安全建議。請用繁體中文回答。' }
+                      ]
+                  }
+              ],
+              config: {
+                  thinkingConfig: {
+                      thinkingBudget: 16000 
+                  }
+              }
+          });
+          return response.text || '無法辨識圖片內容。';
+      } catch (e) {
+          console.error('Gemini Image Analysis Error', e);
+          return '圖片分析服務暫時無法使用。';
+      }
   }
 
   // Maps Grounding

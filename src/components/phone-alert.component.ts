@@ -1,719 +1,733 @@
-import { Component, input, signal, effect, inject } from '@angular/core';
+import { Component, input, signal, effect, inject, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { GeminiService } from '../services/gemini.service';
 
-type AppType = 'HOME' | 'EEW' | 'MAPS' | 'VISION' | 'WEATHER' | 'NEWS' | 'SETTINGS' | 
+type AppType = 'HOME' | 'EEW' | 'MAPS' | 'WEATHER' | 'NEWS' | 'STOCKS' | 'SETTINGS' | 
                'SOCIAL' | 'CAMERA' | 'PHOTOS' | 'MUSIC' | 'MAIL' | 'CALENDAR' | 
-               'CLOCK' | 'NOTES' | 'CALCULATOR' | 'BROWSER';
+               'CLOCK' | 'NOTES' | 'CALCULATOR' | 'BROWSER' | 'FLASHLIGHT';
+
+interface NavPage {
+    id: string;
+    title: string;
+    type: 'list' | 'detail' | 'grid' | 'custom' | 'gallery' | 'article' | 'map' | 'chart' | 'flashlight' | 'raw';
+    content: any;
+    depth: number;
+    appName: string; 
+    meta?: any; // Extra data for context
+}
 
 @Component({
   selector: 'app-phone-alert',
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="relative w-[320px] h-[640px] bg-black rounded-[3rem] border-[6px] border-slate-800 shadow-2xl overflow-hidden font-sans select-none transform transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] hover:scale-105 will-change-transform">
+    <div class="relative w-[360px] h-[720px] bg-[#000000] rounded-[3.5rem] border-[8px] border-[#333333] shadow-[0_30px_60px_-12px_rgba(0,0,0,0.8)] overflow-hidden font-sans select-none transform transition-transform duration-300 ease-out hover:scale-[1.01] will-change-transform ring-4 ring-black/50"
+         (mousemove)="handleMouseMove($event)" (mouseleave)="resetParallax()">
       
+      <!-- Flashlight Overlay (Beam Effect) -->
+      <div class="absolute inset-0 pointer-events-none z-[60] transition-all duration-300 mix-blend-overlay" 
+           [class.opacity-0]="!flashlightOn()" [class.opacity-100]="flashlightOn()"
+           style="background: radial-gradient(circle at 50% 10%, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0) 60%);">
+      </div>
+      <div class="absolute inset-0 pointer-events-none z-[60] transition-opacity duration-300 bg-white/10"
+           [class.opacity-0]="!flashlightOn()" [class.opacity-100]="flashlightOn()"></div>
+
       <!-- Dynamic Island / Notch -->
-      <div class="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-8 bg-black rounded-b-3xl z-50 flex justify-center items-center">
-        <div class="w-20 h-5 bg-black rounded-full flex items-center justify-between px-2 relative overflow-hidden">
-             <!-- Activity Indicators -->
-            <div class="w-1.5 h-1.5 rounded-full bg-green-500" [class.animate-pulse]="active()"></div>
+      <div class="absolute top-2 left-1/2 -translate-x-1/2 w-[120px] h-[35px] bg-black rounded-full z-50 flex justify-center items-center shadow-md transition-all duration-300"
+           [class.w-[200px]]="active()">
+        <div class="w-full h-full flex items-center justify-between px-3 relative overflow-hidden group">
+            <!-- Sensors/Camera -->
+            <div class="flex gap-3 items-center">
+                <div class="w-3 h-3 rounded-full bg-[#1a1a1a] ring-1 ring-white/10 shadow-inner"></div>
+                <!-- Alert Indicator -->
+                <div class="w-1.5 h-1.5 rounded-full transition-colors duration-300" 
+                     [class.bg-green-500]="!active()" 
+                     [class.bg-red-500]="active() && !volcano()" 
+                     [class.bg-orange-500]="active() && volcano()" 
+                     [class.animate-pulse]="active()"></div>
+            </div>
+            
             @if(active()) {
-                <div class="text-[8px] text-white font-mono animate-marquee whitespace-nowrap px-1">PWS ALERT ACTIVE</div>
+                <div class="flex-1 text-center">
+                    <div class="text-[10px] text-white font-bold animate-pulse whitespace-nowrap">{{ getNotchText() }}</div>
+                </div>
+                <div class="w-4 h-4 rounded-full bg-red-500/20 flex items-center justify-center">
+                    <div class="w-2 h-2 bg-red-500 rounded-full animate-ping"></div>
+                </div>
             }
-            <div class="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
         </div>
       </div>
       
       <!-- Screen Content Container -->
-      <div class="w-full h-full bg-slate-900 flex flex-col relative overflow-hidden text-white">
+      <div class="w-full h-full bg-slate-900 flex flex-col relative overflow-hidden text-white rounded-[3rem]">
           
-          <!-- Wallpaper Layer -->
-          <div class="absolute inset-0 z-0 bg-cover bg-center transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]"
-               [style.background-image]="'url(https://picsum.photos/320/640)'"
-               [class.scale-125]="currentApp() !== 'HOME'"
-               [class.blur-xl]="currentApp() !== 'HOME'">
-               <div class="absolute inset-0 bg-black/30"></div>
+          <!-- Wallpaper with Parallax -->
+          <div class="absolute inset-[-25px] z-0 bg-cover bg-center transition-transform duration-100 ease-out"
+               [style.background-image]="'url(https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80)'"
+               [style.transform]="parallaxStyle()"
+               [class.blur-xl]="currentApp() !== 'HOME' && currentApp() !== 'FLASHLIGHT'"
+               [class.scale-110]="currentApp() !== 'HOME'">
+               <div class="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/70"></div>
           </div>
 
           <!-- Status Bar -->
-          <div class="absolute top-3 left-8 text-[12px] font-bold text-white z-40 drop-shadow-md">{{time()}}</div>
-          <div class="absolute top-3 right-8 text-[12px] font-bold text-white flex gap-1.5 z-40 drop-shadow-md">
-             <div class="w-4 h-3 border border-white rounded-[2px] relative ml-0.5"><div class="absolute inset-y-0.5 left-0.5 right-1 bg-white"></div></div>
+          <div class="absolute top-4 left-10 text-[14px] font-semibold text-white z-40 drop-shadow-md tracking-wide">{{time()}}</div>
+          <div class="absolute top-4 right-9 text-[12px] font-bold text-white flex gap-1.5 z-40 drop-shadow-md items-center">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M1.5 8.67v8.58a3 3 0 003 3h15a3 3 0 003-3V8.67l-8.928 5.493a3 3 0 01-3.144 0L1.5 8.67z"/><path d="M22.5 6.908V6.75a3 3 0 00-3-3h-15a3 3 0 00-3 3v.158l9.714 5.978a1.5 1.5 0 001.572 0L22.5 6.908z"/></svg>
+             <div class="w-6 h-3 border border-white/60 rounded-[4px] relative p-[1.5px]"><div class="h-full bg-white rounded-[2px]" [style.width.%]="batteryLevel()"></div></div>
           </div>
 
-          <!-- ANIMATION OVERLAY (The "Video") -->
-          <!-- Plays when opening ANY app -->
-          @if (isPlayingAnimation()) {
-             <div class="absolute inset-0 z-[100] bg-black flex items-center justify-center overflow-hidden animate-in fade-in duration-200">
-                 <!-- Simulation of the Red ROG-style video -->
-                 <div class="absolute inset-0 bg-gradient-to-br from-red-900 to-black"></div>
-                 <div class="absolute w-[200%] h-[10px] bg-red-500 blur-xl rotate-45 animate-slash"></div>
-                 <div class="absolute w-[200%] h-[2px] bg-white rotate-45 animate-slash delay-100"></div>
-                 <div class="absolute inset-0 flex items-center justify-center">
-                     <svg viewBox="0 0 100 100" class="w-32 h-32 text-red-600 fill-current animate-pulse-fast drop-shadow-[0_0_20px_rgba(220,38,38,0.8)]">
-                         <path d="M50 20 L80 80 L20 80 Z" />
-                         <path d="M30 65 L70 65 L50 35 Z" fill="black"/>
-                     </svg>
-                 </div>
-                 <div class="absolute bottom-10 text-red-500 font-mono text-xl font-bold tracking-[0.5em] animate-pulse">SYSTEM START</div>
-             </div>
-          }
-
-          <!-- HOME SCREEN -->
-          <div class="relative z-10 flex-1 flex flex-col pt-16 px-4 pb-6 transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] origin-center"
+          <!-- HOME SCREEN (Level 1) -->
+          <div class="relative z-10 flex-1 flex flex-col pt-20 px-6 pb-8 transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
                [class.opacity-0]="currentApp() !== 'HOME'"
                [class.scale-90]="currentApp() !== 'HOME'"
                [class.pointer-events-none]="currentApp() !== 'HOME'">
                
-               <!-- App Grid (16 Apps - 4x4) -->
-               <div class="grid grid-cols-4 gap-x-2 gap-y-5 mt-4">
-                    <!-- Row 1 -->
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('EEW')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-gray-800 to-black flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-500"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+               <!-- Widgets -->
+               <div class="flex gap-4 mb-8 h-36">
+                   <div class="flex-1 bg-white/20 backdrop-blur-xl rounded-[24px] p-4 shadow-xl flex flex-col justify-between border border-white/20 relative overflow-hidden group cursor-pointer" (click)="openApp('WEATHER')">
+                       <div class="absolute inset-0 bg-gradient-to-br from-blue-400/30 to-purple-500/30 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                       <div class="text-[11px] font-bold uppercase text-white/80 z-10">Weather</div>
+                       <div class="z-10">
+                           <div class="text-4xl font-light tracking-tighter">24°</div>
+                           <div class="text-[12px] font-medium opacity-90">H:28° L:19°</div>
+                       </div>
+                       <div class="absolute top-4 right-4 text-yellow-300 text-2xl">☀</div>
+                   </div>
+                   <div class="flex-1 bg-black/40 backdrop-blur-xl rounded-[24px] p-4 shadow-xl flex flex-col justify-between border border-white/10 relative overflow-hidden group cursor-pointer" (click)="openApp('EEW')">
+                        <div class="absolute inset-0 bg-gradient-to-br from-red-900/40 to-black/40 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <div class="text-[11px] font-bold uppercase text-white/80 z-10">Seismic Network</div>
+                        <div class="z-10 flex items-end gap-2">
+                           <div class="text-3xl font-bold text-green-400">OK</div>
+                           <div class="text-[10px] mb-1 opacity-70">Normal</div>
                         </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">EEW</span>
-                    </button>
+                        <div class="absolute right-3 bottom-3 opacity-30"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h2l2 8 4-16 4 16 4-8h2"/></svg></div>
+                   </div>
+               </div>
 
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('MAPS')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-green-500 to-emerald-700 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"></polygon></svg>
+               <!-- App Grid -->
+               <div class="grid grid-cols-4 gap-x-5 gap-y-7">
+                    <button *ngFor="let app of appsList" 
+                            class="flex flex-col items-center gap-2 group relative" 
+                            (click)="openApp(app.id)">
+                        <div class="w-[62px] h-[62px] rounded-[18px] flex items-center justify-center shadow-2xl border-[0.5px] border-white/20 group-active:scale-90 transition-transform duration-200 relative overflow-hidden bg-gradient-to-br" 
+                             [ngClass]="app.bgClass">
+                             <div class="text-white drop-shadow-md transform group-hover:scale-110 transition-transform duration-300" [innerHTML]="getSafeHtml(app.icon)"></div>
+                             <!-- Gloss Shine -->
+                             <div class="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                         </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Maps</span>
+                        <span class="text-[11px] text-white font-medium drop-shadow-md tracking-tight group-hover:text-white/90">{{app.name}}</span>
                     </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('VISION')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-700 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform relative overflow-hidden">
-                             <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-30"></div>
-                             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Vision</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('WEATHER')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white" stroke="currentColor" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19c0-1.7-1.3-3-3-3h-1.1c-.2-2.3-2.1-4-4.4-4-2.5 0-4.5 2-4.5 4.5 0 .2 0 .5.1.7-1.5.4-2.6 1.7-2.6 3.3 0 1.9 1.6 3.5 3.5 3.5h11.5c1.7 0 3-1.3 3-3z"></path></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Weather</span>
-                    </button>
-
-                    <!-- Row 2 -->
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('NEWS')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-red-500 to-pink-600 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <span class="font-black text-xl italic text-white">N</span>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">News</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('SOCIAL')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white" stroke="currentColor" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Social</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('CAMERA')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-zinc-400 to-zinc-600 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <div class="w-8 h-8 rounded-full bg-black border-2 border-zinc-700 ring-1 ring-zinc-500"></div>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Camera</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('PHOTOS')">
-                         <div class="w-14 h-14 rounded-2xl bg-white flex items-center justify-center shadow-lg group-active:scale-90 transition-transform relative overflow-hidden">
-                             <div class="w-4 h-4 rounded-full bg-orange-400 absolute top-2 left-2 opacity-80 mix-blend-multiply"></div>
-                             <div class="w-4 h-4 rounded-full bg-green-400 absolute top-2 right-4 opacity-80 mix-blend-multiply"></div>
-                             <div class="w-4 h-4 rounded-full bg-blue-400 absolute bottom-3 left-4 opacity-80 mix-blend-multiply"></div>
-                             <div class="w-4 h-4 rounded-full bg-pink-400 absolute bottom-2 right-2 opacity-80 mix-blend-multiply"></div>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Photos</span>
-                    </button>
-
-                     <!-- Row 3 -->
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('MUSIC')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white" stroke="currentColor" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Music</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('MAIL')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-400 to-cyan-500 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white" stroke="currentColor" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Mail</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('CALENDAR')">
-                        <div class="w-14 h-14 rounded-2xl bg-white flex flex-col items-center justify-center shadow-lg group-active:scale-90 transition-transform">
-                             <div class="text-[8px] text-red-500 font-bold uppercase mt-1">WED</div>
-                             <div class="text-2xl font-light text-black -mt-1">21</div>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Calendar</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('CLOCK')">
-                        <div class="w-14 h-14 rounded-2xl bg-black border border-zinc-700 flex items-center justify-center shadow-lg group-active:scale-90 transition-transform relative">
-                             <div class="w-10 h-10 rounded-full border border-zinc-500 relative">
-                                 <div class="absolute top-1/2 left-1/2 w-[1px] h-3 bg-white -translate-x-1/2 origin-bottom -translate-y-full rotate-45"></div>
-                                 <div class="absolute top-1/2 left-1/2 w-[1px] h-2 bg-white -translate-x-1/2 origin-bottom -translate-y-full -rotate-90"></div>
-                                 <div class="absolute top-1/2 left-1/2 w-[1px] h-4 bg-orange-500 -translate-x-1/2 origin-bottom -translate-y-full rotate-12"></div>
-                             </div>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Clock</span>
-                    </button>
-
-                     <!-- Row 4 -->
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('NOTES')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-yellow-300 to-yellow-500 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform pt-1">
-                             <div class="w-8 h-8 bg-white/50 rounded-sm">
-                                 <div class="w-6 h-[1px] bg-black/20 mx-auto mt-2"></div>
-                                 <div class="w-6 h-[1px] bg-black/20 mx-auto mt-1"></div>
-                                 <div class="w-4 h-[1px] bg-black/20 mx-auto mt-1 mr-3"></div>
-                             </div>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Notes</span>
-                    </button>
-                    
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('CALCULATOR')">
-                        <div class="w-14 h-14 rounded-2xl bg-gray-800 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <div class="grid grid-cols-2 gap-0.5">
-                                 <div class="w-2 h-2 bg-orange-500 rounded-full"></div>
-                                 <div class="w-2 h-2 bg-zinc-500 rounded-full"></div>
-                                 <div class="w-2 h-2 bg-zinc-500 rounded-full"></div>
-                                 <div class="w-2 h-2 bg-zinc-500 rounded-full"></div>
-                             </div>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Calc</span>
-                    </button>
-
-                    <button class="flex flex-col items-center gap-1 group" (click)="openApp('BROWSER')">
-                         <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-400 to-blue-500 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Browser</span>
-                    </button>
-
-                     <button class="flex flex-col items-center gap-1 group" (click)="openApp('SETTINGS')">
-                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center shadow-lg border border-white/10 group-active:scale-90 transition-transform">
-                             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                        </div>
-                        <span class="text-[10px] text-white font-medium drop-shadow-md">Settings</span>
+               </div>
+               
+               <!-- Dock -->
+               <div class="absolute bottom-6 left-6 right-6 h-[90px] bg-white/10 backdrop-blur-2xl rounded-[30px] border border-white/10 flex items-center justify-evenly px-2 shadow-2xl">
+                    <button *ngFor="let dockApp of dockList" (click)="openApp(dockApp.id)" class="group active:scale-90 transition-transform duration-200 flex flex-col items-center gap-1">
+                        <div class="w-[58px] h-[58px] rounded-[18px] flex items-center justify-center shadow-lg bg-gradient-to-br border border-white/5" [ngClass]="dockApp.bgClass" [innerHTML]="getSafeHtml(dockApp.icon)"></div>
                     </button>
                </div>
           </div>
 
-          <!-- UNIVERSAL APP CONTAINER -->
-          <div class="absolute inset-0 z-20 bg-black flex flex-col transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
-               [class.scale-0]="currentApp() === 'HOME'"
-               [class.opacity-0]="currentApp() === 'HOME'"
-               [class.pointer-events-none]="currentApp() === 'HOME'"
-               [class.scale-100]="currentApp() !== 'HOME'"
-               [class.opacity-100]="currentApp() !== 'HOME'">
+          <!-- APP CONTAINER (Universal Navigation) -->
+          <div class="absolute inset-0 z-20 bg-black flex flex-col transition-all duration-500 ease-[cubic-bezier(0.19,1,0.22,1)]"
+               [class.translate-x-full]="currentApp() === 'HOME'"
+               [class.translate-x-0]="currentApp() !== 'HOME'"
+               [class.rounded-[3rem]]="currentApp() === 'HOME'"
+               [class.rounded-none]="currentApp() !== 'HOME'">
                
-                <!-- APP CONTENT SWITCH -->
-                
-                <!-- 1. EEW -->
-                @if(currentApp() === 'EEW') {
-                    <div class="h-24 bg-zinc-900 pt-10 px-4 flex items-center justify-between border-b border-zinc-800">
-                        <button (click)="goHome()" class="text-blue-500 font-bold flex items-center gap-1 text-sm"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>Back</button>
-                        <span class="text-white font-bold text-base">CWA EEW</span>
-                        <div class="w-8"></div>
+               <!-- App Header (Levels 1-5) -->
+               <div class="h-28 pt-12 px-6 flex items-center justify-between z-30 bg-black/80 backdrop-blur-xl sticky top-0 transition-all border-b border-white/5">
+                    <button (click)="goBack()" class="text-blue-500 font-semibold text-[17px] flex items-center gap-1 active:opacity-50 hover:bg-white/5 px-2 py-1 -ml-2 rounded-lg transition-colors">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                        {{ navStack().length > 1 ? 'Back' : 'Home' }}
+                    </button>
+                    <span class="text-white font-bold text-[17px] truncate max-w-[160px] animate-in fade-in slide-in-from-bottom-2">{{ getCurrentPageTitle() }}</span>
+                    <!-- Context Indicator (Level) -->
+                    <div class="flex items-center gap-1">
+                        <div *ngFor="let i of [1,2,3,4,5]" class="w-1.5 h-1.5 rounded-full transition-colors"
+                             [class.bg-blue-500]="i <= navStack().length"
+                             [class.bg-gray-800]="i > navStack().length"></div>
                     </div>
-                    <div class="flex-1 bg-black p-4 overflow-y-auto">
-                        @if(active()) {
-                            <div class="flex flex-col items-center justify-center h-full space-y-6 animate-in zoom-in duration-300">
-                                <div class="w-24 h-24 rounded-full bg-red-600/20 flex items-center justify-center animate-ping-slow">
-                                    <div class="w-16 h-16 rounded-full bg-red-600 flex items-center justify-center shadow-[0_0_20px_red]">
-                                        <span class="text-2xl font-black">{{intensity()}}</span>
+               </div>
+
+               <!-- Active Page Content -->
+               <div class="flex-1 overflow-y-auto bg-black relative scroll-smooth p-0">
+                   
+                   <!-- FLASHLIGHT APP (Custom UI) -->
+                   @if(currentApp() === 'FLASHLIGHT') {
+                       <div class="flex flex-col items-center justify-center h-full gap-10 bg-gradient-to-b from-gray-900 to-black">
+                           <button (click)="toggleFlashlight()" 
+                                   class="w-40 h-40 rounded-full border-[6px] flex items-center justify-center shadow-[0_0_60px_rgba(255,255,255,0.1)] transition-all duration-300 active:scale-95 relative overflow-hidden group"
+                                   [class.bg-white]="flashlightOn()" [class.border-white]="flashlightOn()" [class.shadow-[0_0_100px_white]]="flashlightOn()"
+                                   [class.bg-transparent]="!flashlightOn()" [class.border-gray-700]="!flashlightOn()">
+                               
+                               <div class="absolute inset-0 bg-gradient-to-br from-gray-800 to-black opacity-20" *ngIf="!flashlightOn()"></div>
+                               
+                               <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" 
+                                    [class.text-black]="flashlightOn()" [class.text-gray-600]="!flashlightOn()"
+                                    class="relative z-10 transition-colors duration-300">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                               </svg>
+                           </button>
+                           <div class="flex flex-col items-center gap-2">
+                                <div class="text-white font-bold text-2xl tracking-wide">{{ flashlightOn() ? 'ON' : 'OFF' }}</div>
+                                <div class="text-gray-500 text-xs font-mono uppercase tracking-widest bg-gray-900 px-3 py-1 rounded-full border border-gray-800">
+                                    Level 5 Intensity
+                                </div>
+                           </div>
+                       </div>
+                   }
+
+                   <!-- EEW DASHBOARD (Level 1 - Custom) -->
+                   @if(currentApp() === 'EEW' && getCurrentPageType() === 'custom') {
+                       <div class="p-5 flex flex-col h-full bg-gradient-to-b from-gray-900 to-black space-y-6">
+                           <!-- Active Alert Card -->
+                           <div class="rounded-[32px] p-6 relative overflow-hidden shadow-2xl border border-white/10 group cursor-pointer transition-transform active:scale-[0.98]" 
+                                (click)="navigate('Event Analysis', 'article', null)"
+                                [class.bg-gradient-to-br]="true"
+                                [class.from-red-900]="!volcano()" [class.to-black]="!volcano()"
+                                [class.from-orange-900]="volcano()" [class.to-slate-900]="volcano()">
+                               
+                               <div class="absolute -right-8 -top-8 opacity-20 transform rotate-12 group-hover:scale-110 transition-transform duration-700">
+                                   <svg width="180" height="180" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 22h20L12 2zm0 3.5L18.5 19H5.5L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/></svg>
+                               </div>
+                               <div class="relative z-10">
+                                   <div class="text-[11px] font-black opacity-80 uppercase tracking-[0.2em] mb-4 border-b border-white/20 pb-2 inline-flex items-center gap-2">
+                                       <span class="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                                       {{ volcano() ? 'VOLCANO WARNING' : 'SEISMIC ALERT' }}
+                                   </div>
+                                   <div class="flex items-end gap-3 mb-2">
+                                       <div class="text-7xl font-black tracking-tighter leading-none">{{ intensity() || '0' }}</div>
+                                       <div class="text-2xl font-bold text-white/80 mb-1">M{{ magnitude() || '0.0' }}</div>
+                                   </div>
+                                   <div class="text-[15px] font-medium leading-snug opacity-90 text-white/90 line-clamp-2 pr-4">{{ location() || 'No Active Event' }}</div>
+                                   <div class="mt-6 flex gap-2">
+                                       <span class="px-3 py-1.5 bg-white/10 rounded-full text-[11px] font-bold backdrop-blur border border-white/10">P-Wave Arrived</span>
+                                       <span class="px-3 py-1.5 bg-red-500/30 rounded-full text-[11px] font-bold backdrop-blur border border-red-500/30 animate-pulse">S-Wave Inbound</span>
+                                   </div>
+                               </div>
+                           </div>
+
+                           <!-- Recent List (Level 1 List) -->
+                           <div class="space-y-4">
+                               <div class="flex justify-between items-center px-1">
+                                   <span class="text-sm font-bold text-gray-400 uppercase tracking-wide">Recent Events</span>
+                                   <button class="text-xs text-blue-400 font-bold hover:text-blue-300 transition-colors" (click)="navigate('History', 'list', generateList(10, 'Quake', 'Detail', 'article'))">See All</button>
+                               </div>
+                               <div class="space-y-2">
+                                   <div *ngFor="let i of [1,2,3]" class="bg-[#1a1a1a] p-4 rounded-2xl flex items-center justify-between border border-white/5 active:bg-white/5 transition-colors cursor-pointer"
+                                        (click)="navigate('Event #' + i, 'article', null)">
+                                       <div class="flex items-center gap-4">
+                                           <div class="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center font-mono font-bold text-green-400 border border-white/5">
+                                               3.{{i}}
+                                           </div>
+                                           <div>
+                                               <div class="text-sm font-bold text-white">Minor Tremor</div>
+                                               <div class="text-[11px] text-gray-500">2h ago • Hualien Offshore</div>
+                                           </div>
+                                       </div>
+                                       <svg class="text-gray-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                                   </div>
+                               </div>
+                           </div>
+                       </div>
+                   }
+
+                   <!-- Level 1/2: List View (App Context Specific) -->
+                   @if(getCurrentPageType() === 'list') {
+                       <div class="divide-y divide-white/5 px-2 animate-in slide-in-from-right-8 duration-300">
+                           <button *ngFor="let item of getCurrentListItems(); let i = index" 
+                                   (click)="navigate(item.label, item.targetType || 'detail', item.content)" 
+                                   class="w-full p-4 flex items-center justify-between hover:bg-white/5 active:scale-[0.98] transition-all rounded-xl text-left group"
+                                   [style.animation-delay]="i * 50 + 'ms'">
+                               <div class="flex items-center gap-4">
+                                   <div *ngIf="item.image" class="w-12 h-12 rounded-xl bg-gray-800 bg-cover bg-center shadow-inner" [style.background-image]="'url(' + item.image + ')'"></div>
+                                   <div *ngIf="!item.image && item.icon" class="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center text-xl shadow-inner text-blue-400">{{item.icon}}</div>
+                                   
+                                   <!-- Context-Specific List Item Layout -->
+                                   <div class="flex flex-col flex-1">
+                                       <div class="flex justify-between items-center">
+                                            <span class="text-[15px] font-semibold text-white group-hover:text-blue-400 transition-colors">{{item.label}}</span>
+                                            @if(currentApp() === 'STOCKS') {
+                                                <span class="text-xs font-mono" [class.text-green-400]="item.sub.includes('+')" [class.text-red-400]="item.sub.includes('-')">{{item.sub.split('•')[1] || ''}}</span>
+                                            }
+                                       </div>
+                                       <span class="text-[12px] text-gray-500 line-clamp-1 mt-0.5">{{item.sub}}</span>
+                                   </div>
+                               </div>
+                               <div class="text-gray-600 group-hover:text-white transition-colors ml-2">
+                                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                               </div>
+                           </button>
+                       </div>
+                   }
+
+                   <!-- Level 3: Detail / Article View (Context Specific) -->
+                   @if(getCurrentPageType() === 'article' || getCurrentPageType() === 'detail') {
+                       <div class="bg-black min-h-full pb-20 animate-in slide-in-from-bottom-12 duration-500">
+                           
+                           <!-- Header Image (Context Aware) -->
+                           <div class="w-full h-72 bg-gray-800 bg-cover bg-center relative shadow-2xl" [style.background-image]="'url(' + getContextualImage(currentApp()) + ')'">
+                                <div class="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent"></div>
+                                <div class="absolute bottom-6 left-6 right-6">
+                                    <div class="bg-blue-600/90 text-white text-[10px] font-bold px-2 py-1 rounded w-fit mb-3 uppercase tracking-wide backdrop-blur">
+                                        {{ currentApp() }} • Level {{ navStack().length }}
                                     </div>
+                                    <h1 class="text-3xl font-bold text-white leading-tight drop-shadow-xl">{{getCurrentPageTitle()}}</h1>
                                 </div>
-                                <div class="text-center space-y-1">
-                                    <h2 class="text-red-500 font-bold text-xl uppercase tracking-widest">Earthquake Alert</h2>
-                                    <p class="text-white text-sm">Est. Magnitude: M{{magnitude()}}</p>
-                                    <p class="text-gray-400 text-xs">{{location()}}</p>
+                           </div>
+                           
+                           <div class="p-6 space-y-8">
+                               <!-- Author/Meta Info -->
+                               <div class="flex items-center gap-3 text-xs text-gray-400 border-b border-white/10 pb-6">
+                                   <div class="w-10 h-10 rounded-full bg-gray-700 border border-white/10 overflow-hidden">
+                                       <img src="https://i.pravatar.cc/150?u=a042581f4e29026704d" class="w-full h-full object-cover">
+                                   </div>
+                                   <div class="flex flex-col">
+                                       <span class="text-white font-bold text-sm">{{ getContextualAuthor(currentApp()) }}</span>
+                                       <span>2 hours ago • Verified Source</span>
+                                   </div>
+                               </div>
+                               
+                               <!-- Body Text (Simulated Context) -->
+                               <div class="text-[15px] text-gray-300 leading-7 font-normal space-y-4">
+                                   <p>{{ getContextualBody(currentApp()) }}</p>
+                                   <p>Detailed analysis continues below with visualization data extracted from the {{currentApp()}} core engine.</p>
+                                </div>
+
+                               <!-- Level 4 Preview: Embedded Chart (Context Aware Type) -->
+                               <div class="bg-[#1c1c1e] rounded-2xl p-6 border border-white/5 shadow-lg group cursor-pointer hover:border-blue-500/50 transition-colors" 
+                                    (click)="navigate('Visual Analysis', 'chart', null)">
+                                   <div class="flex justify-between items-end mb-6">
+                                       <div>
+                                           <div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">{{currentApp()}} VISUALIZATION</div>
+                                           <div class="text-xl font-bold text-white">
+                                               {{ currentApp() === 'STOCKS' ? 'Market Trend' : (currentApp() === 'WEATHER' ? 'Temp Curve' : (currentApp() === 'EEW' ? 'Waveform' : 'Data Metrics')) }}
+                                           </div>
+                                       </div>
+                                       <div class="bg-green-500/20 text-green-400 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
+                                           ▲ 12.5%
+                                       </div>
+                                   </div>
+                                   
+                                   <!-- Contextual Chart Type -->
+                                   <div class="flex items-end gap-1.5 h-40 border-b border-white/10 pb-1">
+                                       <!-- Stocks: Candlestick approximation -->
+                                       @if(currentApp() === 'STOCKS') {
+                                            <div *ngFor="let h of [40, 60, 45, 70, 55, 80, 65, 90, 75]" class="flex-1 flex flex-col justify-end items-center group relative h-full">
+                                                <div class="w-[1px] bg-gray-500 h-full absolute"></div>
+                                                <div class="w-full relative z-10" 
+                                                     [style.height.%]="h/2" 
+                                                     [class.bg-green-500]="h%2===0" [class.bg-red-500]="h%2!==0"></div>
+                                            </div>
+                                       } 
+                                       <!-- Weather: Line/Bar hybrid -->
+                                       @else if (currentApp() === 'WEATHER') {
+                                            <div *ngFor="let h of [20, 25, 30, 45, 60, 80, 75, 50, 40]" 
+                                                 class="flex-1 bg-yellow-500/50 rounded-t-full hover:bg-yellow-400 transition-colors" 
+                                                 [style.height.%]="h"></div>
+                                       }
+                                       <!-- EEW: Waveform / Frequency Distribution -->
+                                       @else if (currentApp() === 'EEW') {
+                                            <div *ngFor="let h of [10, 15, 80, 95, 40, 20, 15, 30, 85, 90, 25, 10, 5]" 
+                                                 class="flex-1 bg-gradient-to-t from-purple-900 to-purple-500 rounded-t-sm" 
+                                                 [style.height.%]="h"></div>
+                                       }
+                                       <!-- Default: Bar -->
+                                       @else {
+                                            <div *ngFor="let h of [40, 65, 35, 85, 50, 75, 95, 55, 80]" 
+                                                 class="flex-1 bg-gradient-to-t from-blue-900 to-blue-500 rounded-t-[3px] hover:from-blue-700 hover:to-blue-400 transition-all" 
+                                                 [style.height.%]="h">
+                                            </div>
+                                       }
+                                   </div>
+                                   <div class="mt-3 flex justify-between text-[10px] text-gray-500 uppercase font-bold">
+                                       <span>Start</span>
+                                       <span>Click to Expand (Level {{navStack().length + 1}})</span>
+                                       <span>End</span>
+                                   </div>
+                               </div>
+
+                               @if(navStack().length < 5) {
+                                   <button (click)="navigate('Deep Data Source', 'raw', null)" class="w-full py-4 bg-white/5 hover:bg-white/10 active:scale-[0.98] transition-all rounded-xl font-bold text-sm text-white border border-white/10 flex items-center justify-center gap-2">
+                                       <span>View Raw Metadata (Level {{navStack().length + 1}})</span>
+                                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                                   </button>
+                               }
+                           </div>
+                       </div>
+                   }
+                   
+                   <!-- Level 4: Chart / Map (Expanded) -->
+                   @if(getCurrentPageType() === 'chart' || getCurrentPageType() === 'map') {
+                       <div class="h-full relative bg-[#0f0f0f] p-4 flex flex-col items-center justify-center animate-in zoom-in-95 duration-500">
+                           <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(#444 1px, transparent 1px); background-size: 20px 20px;"></div>
+                           
+                           @if(getCurrentPageType() === 'map') {
+                               <div class="absolute inset-0 bg-slate-800">
+                                   <!-- Stylized Map -->
+                                   <div class="absolute top-0 left-1/4 w-4 h-full bg-slate-700"></div>
+                                   <div class="absolute top-1/3 left-0 w-full h-4 bg-slate-700"></div>
+                                   <div class="absolute top-1/2 right-0 w-full h-2 bg-slate-700 -rotate-12"></div>
+                                   <!-- Pin -->
+                                   <div class="absolute top-1/4 left-1/4 w-10 h-10 -translate-x-5 -translate-y-10 text-red-500 animate-bounce drop-shadow-2xl z-10 filter drop-shadow-lg">
+                                       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+                                   </div>
+                               </div>
+                               <div class="absolute bottom-8 left-4 right-4 bg-black/80 backdrop-blur-xl p-5 rounded-2xl border border-white/10 shadow-2xl">
+                                   <div class="flex justify-between items-start mb-2">
+                                       <h3 class="text-white font-bold text-base">Target Location</h3>
+                                       <span class="text-[10px] bg-blue-600 px-2 py-0.5 rounded font-bold">LIVE</span>
+                                   </div>
+                                   <p class="text-gray-400 text-xs font-mono">LAT: 25.0345 N | LNG: 121.5644 E</p>
+                                   <button (click)="navigate('Sector Data', 'raw', null)" class="w-full mt-4 bg-white/10 hover:bg-white/20 py-3 rounded-xl text-sm font-bold transition-colors">Analyze Sector (Level 5)</button>
+                               </div>
+                           } @else {
+                               <!-- Large Interactive Chart (Context Aware) -->
+                               <div class="w-full h-80 bg-gray-900 rounded-3xl p-6 border border-white/5 relative shadow-2xl overflow-hidden">
+                                   <div class="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-black/50 to-transparent z-10"></div>
+                                   <div class="absolute top-4 left-6 text-xs font-bold text-gray-400 uppercase tracking-widest">{{currentApp()}} METRICS</div>
+                                   
+                                   <div class="flex items-end justify-between h-full pt-10 pb-2 gap-1.5">
+                                       <div *ngFor="let h of [20, 45, 30, 80, 55, 95, 40, 65, 35, 75, 50, 85, 60, 90, 45]" 
+                                            class="w-full rounded-t-[4px] animate-in slide-in-from-bottom duration-[1000ms] hover:opacity-80 transition-opacity"
+                                            [class.bg-gradient-to-t]="true"
+                                            [class.from-purple-600]="currentApp() === 'EEW'" [class.to-pink-500]="currentApp() === 'EEW'"
+                                            [class.from-green-600]="currentApp() === 'STOCKS'" [class.to-emerald-400]="currentApp() === 'STOCKS'"
+                                            [class.from-blue-600]="currentApp() === 'WEATHER'" [class.to-cyan-400]="currentApp() === 'WEATHER'"
+                                            [class.from-gray-700]="currentApp() === 'NEWS'" [class.to-gray-400]="currentApp() === 'NEWS'"
+                                            [style.height.%]="h"></div>
+                                   </div>
+                               </div>
+                               <div class="mt-8 text-center px-6">
+                                   <h2 class="text-2xl font-bold text-white mb-2">Deep Analysis</h2>
+                                   <p class="text-gray-400 text-sm leading-relaxed">
+                                       Visualizing complex datasets from the last 24 hours. The trend indicates a significant anomaly in the sector.
+                                   </p>
+                                   <button (click)="navigate('Raw Dataset', 'raw', null)" class="mt-6 text-blue-400 text-sm font-bold hover:text-blue-300">View Source Data (Level 5)</button>
+                               </div>
+                           }
+                       </div>
+                   }
+
+                   <!-- Level 5: Raw Data / Terminal (Context Aware) -->
+                   @if(getCurrentPageType() === 'raw') {
+                        <div class="h-full bg-[#0d1117] p-4 font-mono text-xs overflow-y-auto text-green-400/90 animate-in fade-in duration-500">
+                            <div class="mb-4 text-white font-bold border-b border-white/10 pb-2 flex justify-between">
+                                <span>RAW_{{currentApp()}}_STREAM.json</span>
+                                <span class="text-gray-500">RO-444</span>
+                            </div>
+                            <div class="space-y-1">
+                                <div><span class="text-purple-400">timestamp</span>: {{active() ? '1692634455000' : '1692634000000'}},</div>
+                                <div><span class="text-purple-400">app_context</span>: "{{currentApp()}}",</div>
+                                <div><span class="text-purple-400">depth_level</span>: 5,</div>
+                                <div><span class="text-purple-400">payload</span>: {{ '{' }}</div>
+                                
+                                @if(currentApp() === 'STOCKS') {
+                                    <div class="pl-4"><span class="text-blue-400">"bid"</span>: 145.20,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"ask"</span>: 145.25,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"vol"</span>: 1200000,</div>
+                                } @else if(currentApp() === 'WEATHER') {
+                                    <div class="pl-4"><span class="text-blue-400">"pressure_hpa"</span>: 1013.2,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"humidity_pct"</span>: 65,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"uv_index"</span>: 7,</div>
+                                } @else if(currentApp() === 'EEW') {
+                                    <div class="pl-4"><span class="text-blue-400">"pga_z"</span>: 12.4,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"pga_ns"</span>: 45.1,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"pga_ew"</span>: 33.2,</div>
+                                } @else {
+                                    <div class="pl-4"><span class="text-blue-400">"signal_strength"</span>: -45,</div>
+                                    <div class="pl-4"><span class="text-blue-400">"latency_ms"</span>: 12,</div>
+                                }
+                                
+                                <div>{{ '}' }},</div>
+                                <div><span class="text-purple-400">checksum</span>: "0x4A5F99B...",</div>
+                                <div class="opacity-50 mt-4">// End of Stream</div>
+                                <div class="mt-4 text-white bg-white/10 p-2 rounded">
+                                    > SYSTEM_CHECK: OK
+                                    <br>> RENDER_COMPLETE
                                 </div>
                             </div>
-                        } @else {
-                            <div class="flex flex-col items-center justify-center h-full text-zinc-600">
-                                <p class="text-sm">Monitoring System Normal</p>
-                            </div>
-                        }
-                    </div>
-                }
-
-                <!-- 2. MAPS (Google Maps Grounding) -->
-                @if(currentApp() === 'MAPS') {
-                     <div class="flex-1 bg-slate-100 relative flex flex-col">
-                        <div class="h-24 bg-white/90 backdrop-blur pt-10 px-4 flex items-center justify-between border-b border-slate-200 z-10">
-                            <button (click)="goHome()" class="text-blue-500 font-bold text-sm">Back</button>
-                            <span class="text-black font-bold">Nearby Shelters</span>
-                            <div class="w-8"></div>
                         </div>
-                        <div class="flex-1 overflow-y-auto p-4 space-y-3">
-                            <div class="bg-blue-50 border border-blue-200 p-3 rounded-lg text-xs text-blue-800">
-                                Gemini Maps Grounding Active
-                            </div>
-                            
-                            @if (mapsResult()) {
-                                <div class="bg-white p-4 rounded-xl shadow text-black text-sm whitespace-pre-wrap leading-relaxed">
-                                    {{mapsResult()}}
-                                </div>
-                            } @else {
-                                <div class="flex flex-col items-center justify-center py-10">
-                                    <button (click)="fetchMapsData()" class="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg active:scale-95 transition-transform">
-                                        Find Nearby Shelters
-                                    </button>
-                                </div>
-                            }
-                        </div>
-                    </div>
-                }
-
-                <!-- 3. VISION (Video AI) -->
-                @if(currentApp() === 'VISION') {
-                     <div class="flex-1 bg-black relative flex flex-col">
-                        <div class="h-24 bg-black/50 backdrop-blur pt-10 px-4 flex items-center justify-between z-10 absolute w-full top-0">
-                            <button (click)="goHome()" class="text-white font-bold text-sm">Back</button>
-                            <span class="text-white font-bold">Video AI</span>
-                            <div class="w-8"></div>
-                        </div>
-                        <div class="flex-1 bg-gray-900 flex flex-col items-center justify-center relative overflow-hidden">
-                             <div class="absolute inset-0 opacity-30 bg-[url('https://picsum.photos/320/640?grayscale')] bg-cover"></div>
-                             <div class="w-48 h-48 border-2 border-white/50 rounded-lg relative flex items-center justify-center">
-                                 <div class="absolute inset-0 border-t-2 border-l-2 border-red-500 w-4 h-4 -top-0.5 -left-0.5"></div>
-                                 <div class="absolute inset-0 border-t-2 border-r-2 border-red-500 w-4 h-4 -top-0.5 -right-0.5"></div>
-                                 <div class="absolute inset-0 border-b-2 border-l-2 border-red-500 w-4 h-4 -bottom-0.5 -left-0.5"></div>
-                                 <div class="absolute inset-0 border-b-2 border-r-2 border-red-500 w-4 h-4 -bottom-0.5 -right-0.5"></div>
-                                 @if (isAnalyzingVideo()) {
-                                     <div class="w-full h-0.5 bg-red-500 shadow-[0_0_10px_red] animate-scan-vertical absolute"></div>
-                                 }
-                             </div>
-                             @if (videoResult()) {
-                                 <div class="absolute bottom-24 left-4 right-4 bg-black/80 backdrop-blur border border-white/20 p-3 rounded-xl text-xs text-white animate-in slide-in-from-bottom-5">
-                                     <div class="text-red-400 font-bold mb-1">GEMINI 3 PRO ANALYSIS</div>
-                                     {{videoResult()}}
-                                 </div>
-                             }
-                        </div>
-                        <div class="h-24 bg-black flex items-center justify-center gap-8 pb-4">
-                            <button (click)="analyzeSampleVideo()" class="w-16 h-16 rounded-full border-4 border-white flex items-center justify-center p-1 active:scale-95 transition-transform">
-                                <div class="w-full h-full bg-red-600 rounded-full"></div>
-                            </button>
-                        </div>
-                    </div>
-                }
-
-                <!-- 4. WEATHER -->
-                @if(currentApp() === 'WEATHER') {
-                    <div class="flex-1 bg-gradient-to-b from-blue-400 to-blue-600 flex flex-col p-6 pt-12 text-white relative">
-                        <button (click)="goHome()" class="absolute top-12 left-6 text-white/80 font-bold text-sm">Back</button>
-                        <div class="mt-8">
-                            <div class="text-4xl font-light">Taipei</div>
-                            <div class="text-6xl font-thin mt-2">24°</div>
-                            <div class="text-lg font-medium mt-1">Cloudy</div>
-                            <div class="text-sm opacity-80">H:28° L:20°</div>
-                        </div>
-                        <div class="mt-8 p-4 bg-white/10 rounded-xl backdrop-blur-md">
-                            <div class="text-xs uppercase opacity-70 mb-2">Hourly Forecast</div>
-                            <div class="flex justify-between text-sm">
-                                <div class="flex flex-col items-center"><span>Now</span><span>24°</span></div>
-                                <div class="flex flex-col items-center"><span>1PM</span><span>25°</span></div>
-                                <div class="flex flex-col items-center"><span>2PM</span><span>26°</span></div>
-                                <div class="flex flex-col items-center"><span>3PM</span><span>25°</span></div>
-                            </div>
-                        </div>
-                    </div>
-                }
-
-                <!-- 5. NEWS -->
-                @if(currentApp() === 'NEWS') {
-                    <div class="h-24 bg-red-600 pt-10 px-4 flex items-center justify-between shadow-md">
-                        <button (click)="goHome()" class="text-white font-bold text-sm opacity-80">Back</button>
-                        <span class="text-white font-black italic text-lg">BREAKING</span>
-                        <div class="w-8"></div>
-                    </div>
-                    <div class="flex-1 bg-gray-100 p-4">
-                         <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                            <div class="text-[10px] text-red-600 font-bold mb-1">LIVE UPDATE</div>
-                            <h3 class="font-bold text-lg leading-tight mb-2 text-black">
-                                {{ active() ? 'Major Earthquake Detected Offshore' : 'Seismic Activity Normal' }}
-                            </h3>
-                            <div class="h-32 bg-gray-300 rounded-lg mb-2 overflow-hidden">
-                                <img src="https://picsum.photos/300/150?grayscale" class="w-full h-full object-cover opacity-80">
-                            </div>
-                        </div>
-                    </div>
-                }
-
-                <!-- 6. SETTINGS -->
-                @if(currentApp() === 'SETTINGS') {
-                    <div class="h-24 bg-[#f2f2f7] pt-10 px-4 flex items-center gap-2 border-b border-gray-300">
-                        <button (click)="goHome()" class="text-blue-500 font-bold text-sm flex items-center"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg> Settings</button>
-                        <span class="text-black font-bold text-lg mx-auto pr-8">Settings</span>
-                    </div>
-                    <div class="flex-1 bg-[#f2f2f7] p-4 space-y-4">
-                        <div class="bg-white rounded-xl overflow-hidden">
-                            <div class="p-3 border-b border-gray-100 flex justify-between items-center">
-                                <span class="text-sm text-black">Airplane Mode</span>
-                                <div class="w-10 h-6 rounded-full bg-gray-200 p-0.5"><div class="w-5 h-5 rounded-full bg-white shadow"></div></div>
-                            </div>
-                            <div class="p-3 flex justify-between items-center">
-                                <span class="text-sm text-black">Wi-Fi</span>
-                                <span class="text-sm text-gray-500">Seismo-Net 5G</span>
-                            </div>
-                        </div>
-                    </div>
-                }
-
-                <!-- 7. SOCIAL -->
-                @if(currentApp() === 'SOCIAL') {
-                    <div class="h-24 bg-[#202020] pt-10 px-4 flex items-center justify-between border-b border-[#333]">
-                        <button (click)="goHome()" class="text-green-500 font-bold text-sm">Back</button>
-                        <span class="text-white font-bold">Line</span>
-                        <div class="w-8"></div>
-                    </div>
-                    <div class="flex-1 bg-[#111] p-4 space-y-4">
-                        @if(active()) {
-                        <div class="flex gap-3 animate-in slide-in-from-left duration-500">
-                            <div class="w-8 h-8 rounded-full bg-gray-500"></div>
-                            <div class="bg-zinc-800 p-2 rounded-xl rounded-tl-none text-sm max-w-[80%]">
-                                Are you okay? I felt that! 😨
-                            </div>
-                        </div>
-                        } @else {
-                            <div class="text-center text-zinc-600 mt-10 text-xs">No new messages</div>
-                        }
-                    </div>
-                }
-
-                <!-- 8. CAMERA -->
-                @if(currentApp() === 'CAMERA') {
-                    <div class="flex-1 bg-black relative">
-                        <div class="absolute inset-0 bg-gray-900 flex items-center justify-center">
-                            <span class="text-gray-600 text-xs">Camera Preview</span>
-                        </div>
-                        <div class="absolute bottom-0 w-full h-24 bg-black/50 backdrop-blur flex items-center justify-center gap-8 pb-4">
-                            <div class="w-12 h-12 bg-gray-800 rounded-full"></div>
-                            <div class="w-16 h-16 bg-white rounded-full border-4 border-gray-300 cursor-pointer active:scale-90 transition-transform"></div>
-                            <button (click)="goHome()" class="w-12 h-12 flex items-center justify-center text-white text-sm font-bold bg-gray-800 rounded-full">Exit</button>
-                        </div>
-                    </div>
-                }
-
-                <!-- 9. PHOTOS -->
-                @if(currentApp() === 'PHOTOS') {
-                    <div class="h-24 bg-white pt-10 px-4 flex items-center justify-between border-b border-gray-200">
-                        <button (click)="goHome()" class="text-blue-500 font-bold text-sm">Back</button>
-                        <span class="text-black font-bold">Photos</span>
-                        <div class="text-blue-500 text-sm">Select</div>
-                    </div>
-                    <div class="flex-1 bg-white overflow-y-auto">
-                        <div class="grid grid-cols-3 gap-0.5">
-                            <div class="aspect-square bg-gray-200"><img src="https://picsum.photos/100/100?random=1" class="w-full h-full object-cover"></div>
-                            <div class="aspect-square bg-gray-200"><img src="https://picsum.photos/100/100?random=2" class="w-full h-full object-cover"></div>
-                            <div class="aspect-square bg-gray-200"><img src="https://picsum.photos/100/100?random=3" class="w-full h-full object-cover"></div>
-                            <div class="aspect-square bg-gray-200"><img src="https://picsum.photos/100/100?random=4" class="w-full h-full object-cover"></div>
-                            <div class="aspect-square bg-gray-200"><img src="https://picsum.photos/100/100?random=5" class="w-full h-full object-cover"></div>
-                            <div class="aspect-square bg-gray-200"><img src="https://picsum.photos/100/100?random=6" class="w-full h-full object-cover"></div>
-                        </div>
-                    </div>
-                }
-
-                <!-- 10. MUSIC -->
-                @if(currentApp() === 'MUSIC') {
-                    <div class="flex-1 bg-gradient-to-b from-gray-900 to-black text-white flex flex-col p-6 pt-12">
-                        <button (click)="goHome()" class="self-start text-red-500 font-bold mb-8 text-sm">Back</button>
-                        <div class="w-full aspect-square bg-gray-800 rounded-xl shadow-2xl mb-8 flex items-center justify-center">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="gray" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-                        </div>
-                        <div class="mb-8">
-                            <h3 class="text-xl font-bold">Seismic Waves</h3>
-                            <p class="text-gray-400 text-sm">Earthquake Simulator</p>
-                        </div>
-                        <div class="flex justify-between items-center mb-6">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
-                        </div>
-                    </div>
-                }
-
-                <!-- 11. MAIL -->
-                @if(currentApp() === 'MAIL') {
-                    <div class="h-24 bg-[#f2f2f7] pt-10 px-4 flex items-center justify-between border-b border-gray-300">
-                        <button (click)="goHome()" class="text-blue-500 font-bold text-sm">Back</button>
-                        <span class="text-black font-bold">Inbox</span>
-                        <div class="text-blue-500 text-sm">Edit</div>
-                    </div>
-                    <div class="flex-1 bg-white">
-                        <div class="border-b border-gray-100 p-3">
-                            <div class="flex justify-between text-xs text-gray-500 mb-1">
-                                <span class="font-bold text-black">CWA Alert</span>
-                                <span>10:23 AM</span>
-                            </div>
-                            <div class="text-xs text-black font-bold">Earthquake Report #124</div>
-                            <div class="text-xs text-gray-400 line-clamp-1">Details regarding the recent seismic event in Hualien...</div>
-                        </div>
-                         <div class="border-b border-gray-100 p-3">
-                            <div class="flex justify-between text-xs text-gray-500 mb-1">
-                                <span class="font-bold text-black">System Admin</span>
-                                <span>Yesterday</span>
-                            </div>
-                            <div class="text-xs text-black font-bold">Server Maintenance</div>
-                            <div class="text-xs text-gray-400 line-clamp-1">Scheduled downtime for sensor upgrades...</div>
-                        </div>
-                    </div>
-                }
-
-                <!-- 12. CALENDAR -->
-                @if(currentApp() === 'CALENDAR') {
-                     <div class="h-24 bg-white pt-10 px-4 flex items-center justify-between border-b border-gray-200 text-red-500">
-                        <button (click)="goHome()" class="font-bold text-sm">Back</button>
-                        <span class="font-bold text-black">Calendar</span>
-                        <div class="text-sm">+</div>
-                    </div>
-                    <div class="flex-1 bg-white p-4">
-                        <div class="text-3xl font-bold text-black mb-4">January</div>
-                        <div class="grid grid-cols-7 gap-2 text-center text-xs text-black">
-                            <span class="text-gray-400">S</span><span class="text-gray-400">M</span><span class="text-gray-400">T</span><span class="text-gray-400">W</span><span class="text-gray-400">T</span><span class="text-gray-400">F</span><span class="text-gray-400">S</span>
-                            <span class="text-gray-300">29</span><span class="text-gray-300">30</span><span class="text-gray-300">31</span><span>1</span><span>2</span><span>3</span><span>4</span>
-                            <span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span>
-                            <span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span>
-                            <span>19</span><span>20</span><span class="bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center mx-auto">21</span><span>22</span><span>23</span><span>24</span><span>25</span>
-                        </div>
-                    </div>
-                }
-
-                <!-- 13. CLOCK -->
-                @if(currentApp() === 'CLOCK') {
-                    <div class="flex-1 bg-black text-white p-4 pt-12">
-                         <div class="flex justify-between items-center mb-6">
-                             <button (click)="goHome()" class="text-orange-500 font-bold text-sm">Back</button>
-                             <span class="font-bold">World Clock</span>
-                             <span class="text-orange-500 text-sm">+</span>
-                         </div>
-                         <div class="space-y-4">
-                             <div class="flex justify-between items-end border-b border-gray-800 pb-2">
-                                 <div>
-                                     <div class="text-xs text-gray-400">Today, +0HRS</div>
-                                     <div class="text-xl">Taipei</div>
-                                 </div>
-                                 <div class="text-4xl font-light">10:42</div>
-                             </div>
-                              <div class="flex justify-between items-end border-b border-gray-800 pb-2">
-                                 <div>
-                                     <div class="text-xs text-gray-400">Today, +1HRS</div>
-                                     <div class="text-xl">Tokyo</div>
-                                 </div>
-                                 <div class="text-4xl font-light">11:42</div>
-                             </div>
-                              <div class="flex justify-between items-end border-b border-gray-800 pb-2">
-                                 <div>
-                                     <div class="text-xs text-gray-400">Yesterday, -13HRS</div>
-                                     <div class="text-xl">New York</div>
-                                 </div>
-                                 <div class="text-4xl font-light">21:42</div>
-                             </div>
-                         </div>
-                    </div>
-                }
-
-                <!-- 14. NOTES -->
-                @if(currentApp() === 'NOTES') {
-                    <div class="flex-1 bg-[#1c1c1e] text-white flex flex-col">
-                         <div class="h-24 pt-10 px-4 flex items-center gap-2">
-                            <button (click)="goHome()" class="text-yellow-500 font-bold text-sm flex items-center"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg> Folders</button>
-                        </div>
-                        <div class="px-4 pb-2">
-                            <h1 class="text-3xl font-bold">Notes</h1>
-                        </div>
-                        <div class="px-4 space-y-3">
-                            <div class="bg-[#2c2c2e] p-3 rounded-xl">
-                                <div class="font-bold text-sm">Earthquake Safety</div>
-                                <div class="text-xs text-gray-400">1. Drop, Cover, and Hold on...</div>
-                            </div>
-                             <div class="bg-[#2c2c2e] p-3 rounded-xl">
-                                <div class="font-bold text-sm">Emergency Kit</div>
-                                <div class="text-xs text-gray-400">Water, Flashlight, Batteries...</div>
-                            </div>
-                        </div>
-                    </div>
-                }
-
-                <!-- 15. CALCULATOR -->
-                @if(currentApp() === 'CALCULATOR') {
-                     <div class="flex-1 bg-black flex flex-col justify-end p-4 pb-8">
-                         <button (click)="goHome()" class="self-start text-white mb-auto mt-8 ml-2">Back</button>
-                         <div class="text-right text-6xl text-white font-light mb-4">0</div>
-                         <div class="grid grid-cols-4 gap-3">
-                             <div class="bg-gray-400 h-14 w-14 rounded-full flex items-center justify-center text-black text-xl font-medium">AC</div>
-                             <div class="bg-gray-400 h-14 w-14 rounded-full flex items-center justify-center text-black text-xl font-medium">+/-</div>
-                             <div class="bg-gray-400 h-14 w-14 rounded-full flex items-center justify-center text-black text-xl font-medium">%</div>
-                             <div class="bg-orange-500 h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-medium">÷</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">7</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">8</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">9</div>
-                             <div class="bg-orange-500 h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-medium">×</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">4</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">5</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">6</div>
-                             <div class="bg-orange-500 h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-medium">-</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">1</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">2</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">3</div>
-                             <div class="bg-orange-500 h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-medium">+</div>
-                             <div class="bg-[#333] h-14 col-span-2 rounded-full flex items-center pl-6 text-white text-xl">0</div>
-                             <div class="bg-[#333] h-14 w-14 rounded-full flex items-center justify-center text-white text-xl">.</div>
-                             <div class="bg-orange-500 h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-medium">=</div>
-                         </div>
-                     </div>
-                }
-
-                <!-- 16. BROWSER -->
-                @if(currentApp() === 'BROWSER') {
-                     <div class="flex-1 bg-white flex flex-col">
-                         <div class="h-24 bg-gray-100 pt-10 px-4 flex items-center justify-between border-b border-gray-300">
-                             <button (click)="goHome()" class="text-blue-500 text-sm">Done</button>
-                             <div class="bg-gray-200 rounded-lg flex-1 mx-4 h-8 flex items-center justify-center text-xs text-gray-500">
-                                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-1"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                                 google.com
-                             </div>
-                             <button class="text-gray-500"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg></button>
-                         </div>
-                         <div class="flex-1 flex flex-col items-center justify-center gap-4">
-                             <div class="text-4xl font-bold text-gray-500 tracking-tighter">Google</div>
-                             <div class="w-64 h-10 border border-gray-300 rounded-full shadow-sm"></div>
-                         </div>
-                     </div>
-                }
+                   }
+               </div>
           </div>
 
-
-          <!-- OVERLAY ALERT (Modal PWS) -->
-          @if (active() && !isAlertDismissed() && currentApp() !== 'EEW') {
-            <div class="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center animate-in zoom-in duration-300">
-                <div class="bg-white/90 backdrop-blur-xl w-64 rounded-2xl overflow-hidden shadow-2xl border border-white/20">
-                    <div class="p-5 flex flex-col items-center text-center">
-                        <div class="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-3 animate-bounce">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-600"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          <!-- PWS NOTIFICATION (True Presidential Alert Popup) -->
+          @if (active() && !isAlertDismissed()) {
+            <div class="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
+                <div class="w-[85%] max-w-[280px] bg-[#1c1c1e] rounded-[22px] overflow-hidden shadow-2xl border border-white/10 animate-in zoom-in duration-300 flex flex-col font-sans">
+                    <div class="p-6 flex flex-col items-center text-center">
+                        <div class="mb-4 relative">
+                            <div class="absolute -inset-4 bg-red-500/20 blur-xl rounded-full"></div>
+                            <h2 class="text-white font-bold text-[19px] leading-6 relative z-10">Emergency Alert</h2>
+                            <p class="text-red-400 text-[11px] font-bold uppercase tracking-widest mt-1 relative z-10">
+                                {{ getAlertHeader() }}
+                            </p>
                         </div>
-                        <h3 class="font-bold text-gray-900 text-lg mb-1">國家級警報</h3>
-                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3">Presidential Alert</p>
-                        <p class="text-sm font-semibold text-gray-800 leading-snug text-left mb-2">
-                            [地震速報] {{time()}} 左右 {{location()}} 發生顯著有感地震，規模 M{{magnitude()}}。
+                        <p class="text-white text-[15px] leading-[20px] font-normal opacity-90">
+                            {{ getAlertMessage() }}
                         </p>
                     </div>
-                    <div class="grid grid-cols-2 border-t border-gray-300/50">
-                        <button (click)="openApp('EEW')" class="py-3 text-blue-600 font-bold text-sm hover:bg-black/5 active:bg-black/10 border-r border-gray-300/50">
-                            View Details
-                        </button>
-                         <button (click)="dismissAlert()" class="py-3 text-blue-600 font-bold text-sm hover:bg-black/5 active:bg-black/10">
-                            Dismiss
+                    <div class="border-t border-white/10 flex">
+                        <button (click)="dismissAlert()" class="flex-1 py-4 text-[#0a84ff] text-[17px] font-semibold active:bg-white/10 transition-colors">
+                            OK
                         </button>
                     </div>
                 </div>
             </div>
           }
-
       </div>
       
-      <!-- Home Indicator -->
-      <div class="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1.5 bg-white rounded-full opacity-50 z-50 cursor-pointer hover:opacity-100 transition-opacity" (click)="goHome()"></div>
+      <!-- Home Bar -->
+      <div class="absolute bottom-2 left-1/2 -translate-x-1/2 w-36 h-1.5 bg-white rounded-full opacity-60 z-50 cursor-pointer hover:opacity-100 transition-opacity hover:scale-110 active:scale-95 shadow-[0_0_10px_white]" (click)="goHome()"></div>
     </div>
-  `,
-  styles: [`
-    @keyframes slash {
-        0% { transform: translateX(-100%) rotate(45deg); opacity: 0; }
-        50% { opacity: 1; }
-        100% { transform: translateX(100%) rotate(45deg); opacity: 0; }
-    }
-    .animate-slash {
-        animation: slash 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-    }
-    @keyframes pulse-fast {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.8; transform: scale(0.95); }
-    }
-    .animate-pulse-fast {
-        animation: pulse-fast 1s infinite;
-    }
-    @keyframes scan-vertical {
-        0% { top: 0%; opacity: 0; }
-        10% { opacity: 1; }
-        90% { opacity: 1; }
-        100% { top: 100%; opacity: 0; }
-    }
-    .animate-scan-vertical {
-        animation: scan-vertical 2s linear infinite;
-    }
-  `]
+  `
 })
 export class PhoneAlertComponent {
     gemini = inject(GeminiService);
+    // Fix: Explicitly type DomSanitizer to prevent implicit 'unknown' error
+    sanitizer: DomSanitizer = inject(DomSanitizer);
 
     active = input<boolean>(false);
-    location = input<string>('東北海域');
+    location = input<string>('');
     time = input<string>('');
-    magnitude = input<string>('---');
-    intensity = input<string>('---');
+    magnitude = input<string>('');
+    intensity = input<string>('');
+    tsunami = input<boolean>(false);
+    volcano = input<boolean>(false);
 
     currentApp = signal<AppType>('HOME');
+    navStack = signal<NavPage[]>([]);
     isAlertDismissed = signal(false);
-    isPlayingAnimation = signal(false);
+    batteryLevel = signal(100);
+    flashlightOn = signal(false);
     
-    // Feature States
-    mapsResult = signal<string | null>(null);
-    videoResult = signal<string | null>(null);
-    isAnalyzingVideo = signal(false);
+    // Parallax State
+    mouseX = 0;
+    mouseY = 0;
+
+    appsList = [
+        { id: 'EEW', name: 'EEW Pro', bgClass: 'from-gray-900 to-black border-red-500/30', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-7 h-7"><path d="M2 12h2l2 8 4-16 4 16 4-8h2"/></svg>' },
+        { id: 'MAPS', name: 'Maps', bgClass: 'from-emerald-500 to-green-600', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' },
+        { id: 'NEWS', name: 'News', bgClass: 'from-rose-500 to-red-600', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 19h12v-2H6v2zm0-4h12v-2H6v2zm0-4h12V9H6v2zm0-4h12V5H6v2z"/></svg>' },
+        { id: 'FLASHLIGHT', name: 'Flashlight', bgClass: 'from-yellow-400 to-amber-500', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>' },
+        { id: 'STOCKS', name: 'Stocks', bgClass: 'from-gray-800 to-slate-900', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>' },
+        { id: 'WEATHER', name: 'Weather', bgClass: 'from-blue-400 to-cyan-500', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.79 1.41-1.41-1.79-1.79-1.41 1.41zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z"/></svg>' },
+        { id: 'SETTINGS', name: 'Settings', bgClass: 'from-gray-500 to-slate-600', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 00-.59.22L2.68 8.87a.484.484 0 00.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.48.48 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.57 1.62-.94l2.39.96c.21.08.47 0 .59-.22l1.92-3.32a.484.484 0 00-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>' },
+        { id: 'CAMERA', name: 'Camera', bgClass: 'from-neutral-700 to-neutral-800 border-2 border-neutral-600', icon: '<div class="w-8 h-8 rounded-full bg-[#1a1a1a] border-2 border-[#333] flex items-center justify-center shadow-inner"><div class="w-3 h-3 rounded-full bg-[#0f0f0f] shadow-[inset_0_1px_2px_rgba(255,255,255,0.2)]"></div></div>' },
+        { id: 'PHOTOS', name: 'Photos', bgClass: 'bg-white', icon: '<div class="w-full h-full relative"><div class="absolute w-3 h-3 rounded-full bg-orange-400 top-2.5 left-3 mix-blend-multiply opacity-90"></div><div class="absolute w-3 h-3 rounded-full bg-green-400 top-2.5 right-3 mix-blend-multiply opacity-90"></div><div class="absolute w-3 h-3 rounded-full bg-blue-400 bottom-3.5 left-4 mix-blend-multiply opacity-90"></div><div class="absolute w-3 h-3 rounded-full bg-pink-400 bottom-2.5 right-2.5 mix-blend-multiply opacity-90"></div></div>' },
+        { id: 'MUSIC', name: 'Music', bgClass: 'from-pink-500 to-rose-600', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-8 h-8"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>' },
+        { id: 'MAIL', name: 'Mail', bgClass: 'from-blue-500 to-indigo-600', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-7 h-7"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>' },
+        { id: 'CALENDAR', name: 'Calendar', bgClass: 'bg-white', icon: '<div class="flex flex-col items-center justify-center pt-1"><span class="text-[7px] text-red-600 font-bold uppercase tracking-wider">WED</span><span class="text-xl font-light text-slate-900 -mt-1">21</span></div>' },
+    ];
+    
+    dockList = [
+        { id: 'PHONE', bgClass: 'from-green-500 to-green-600', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-6 h-6"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>' },
+        { id: 'BROWSER', bgClass: 'from-blue-500 to-blue-600', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" class="w-6 h-6"><circle cx="12" cy="12" r="9"/><line x1="3.6" y1="9" x2="20.4" y2="9"/><line x1="3.6" y1="15" x2="20.4" y2="15"/><path d="M11.5 3a17 17 0 000 18"/><path d="M12.5 3a17 17 0 010 18"/></svg>' },
+        { id: 'NOTES', bgClass: 'from-yellow-400 to-orange-400', icon: '<svg viewBox="0 0 24 24" fill="white" class="w-6 h-6"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>' },
+        { id: 'CALCULATOR', bgClass: 'from-gray-700 to-gray-800', icon: '<div class="grid grid-cols-2 gap-1"><div class="w-2 h-2 rounded-full bg-orange-500"></div><div class="w-2 h-2 rounded-full bg-gray-400"></div><div class="w-2 h-2 rounded-full bg-gray-400"></div><div class="w-2 h-2 rounded-full bg-gray-400"></div></div>' }
+    ];
 
     constructor() {
-        effect(() => {
-            if (this.active()) {
+        effect(() => { 
+            if (this.active()) { 
                 this.isAlertDismissed.set(false);
-            }
+            } 
         });
+        setInterval(() => { this.batteryLevel.update(v => Math.max(10, v - 0.1)); }, 30000);
     }
 
-    openApp(app: AppType) {
-        if (app === this.currentApp()) return;
-        
-        // Play Intro Animation (Red Flash)
-        this.isPlayingAnimation.set(true);
-        setTimeout(() => {
-            this.isPlayingAnimation.set(false);
-            this.currentApp.set(app);
-        }, 800); // 0.8s duration for animation
+    // --- Parallax Effect ---
+    handleMouseMove(e: MouseEvent) {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const x = e.clientX - rect.left - rect.width / 2;
+        const y = e.clientY - rect.top - rect.height / 2;
+        this.mouseX = x;
+        this.mouseY = y;
+    }
+
+    resetParallax() {
+        this.mouseX = 0;
+        this.mouseY = 0;
+    }
+
+    parallaxStyle() {
+        const moveX = -(this.mouseX / 30); 
+        const moveY = -(this.mouseY / 30);
+        return `translate(${moveX}px, ${moveY}px) scale(1.15)`;
+    }
+
+    // --- Flashlight ---
+    toggleFlashlight() {
+        this.flashlightOn.update(v => !v);
+    }
+
+    // --- Navigation & Content ---
+    getSafeHtml(html: string): SafeHtml {
+        return this.sanitizer.bypassSecurityTrustHtml(html);
+    }
+
+    openApp(appId: any) {
+        this.currentApp.set(appId);
+        const rootContent = this.generateRootContent(appId);
+        this.navStack.set([rootContent]);
+    }
+
+    navigate(title: string, type: 'list' | 'detail' | 'grid' | 'custom' | 'gallery' | 'article' | 'map' | 'chart' | 'flashlight' | 'raw', content: any) {
+        const currentDepth = this.navStack().length;
+        this.navStack.update(s => [...s, { 
+            id: Date.now().toString(), 
+            title, 
+            type, 
+            content,
+            depth: currentDepth + 1,
+            appName: this.currentApp()
+        }]);
+    }
+
+    goBack() {
+        if (this.navStack().length > 1) {
+            this.navStack.update(s => s.slice(0, -1));
+        } else {
+            this.goHome();
+        }
     }
 
     goHome() {
         this.currentApp.set('HOME');
+        this.navStack.set([]);
     }
 
     dismissAlert() {
         this.isAlertDismissed.set(true);
     }
 
-    // --- Feature Logic ---
-
-    async fetchMapsData() {
-        this.mapsResult.set('Locating and finding shelters via Google Maps...');
-        // Mock coord for demo
-        const result = await this.gemini.findNearbyPlaces(25.03, 121.56, 'emergency shelter');
-        this.mapsResult.set(result);
+    // Fix: Replace unsupported .at(-1) with standard array index access
+    getCurrentPageTitle() { 
+        const stack = this.navStack();
+        return stack[stack.length - 1]?.title || ''; 
+    }
+    getCurrentPageType() { 
+        const stack = this.navStack();
+        return stack[stack.length - 1]?.type || 'list'; 
+    }
+    getCurrentContent() { 
+        const stack = this.navStack();
+        return stack[stack.length - 1]?.content; 
+    }
+    getCurrentListItems() { 
+        const stack = this.navStack();
+        const content = stack[stack.length - 1]?.content;
+        return Array.isArray(content) ? content : []; 
     }
 
-    async analyzeSampleVideo() {
-        this.isAnalyzingVideo.set(true);
-        this.videoResult.set(null);
+    // --- Context-Aware Content Generator ---
+    generateRootContent(appId: string): NavPage {
+        const depth = 1;
+        switch(appId) {
+            case 'EEW': return { id: 'root', title: 'EEW Dashboard', type: 'custom', content: 'dashboard', depth, appName: appId };
+            case 'FLASHLIGHT': return { id: 'root', title: 'Flashlight', type: 'flashlight', content: null, depth, appName: appId };
+            
+            case 'NEWS': return { id: 'root', title: 'Top Stories', type: 'list', content: this.generateNewsItems(), depth, appName: appId };
+            case 'WEATHER': return { id: 'root', title: 'Forecast', type: 'list', content: this.generateWeatherItems(), depth, appName: appId };
+            case 'STOCKS': return { id: 'root', title: 'Market Watch', type: 'list', content: this.generateStockItems(), depth, appName: appId };
+            case 'MAPS': return { id: 'root', title: 'Explore', type: 'map', content: null, depth, appName: appId };
+            
+            case 'SETTINGS': return { id: 'root', title: 'Settings', type: 'list', content: [
+                { label: 'Airplane Mode', sub: 'Off', icon: '✈️', targetType: 'detail' },
+                { label: 'Wi-Fi', sub: 'Seismo-Net', icon: '📶', targetType: 'list', content: this.generateList(5, 'Network') },
+                { label: 'Notifications', sub: 'On', icon: '🔔', targetType: 'list', content: this.generateList(3, 'App') },
+                { label: 'General', sub: '', icon: '⚙️', targetType: 'list', content: this.generateList(6, 'Option') },
+                { label: 'Display & Brightness', sub: '', icon: '☀️', targetType: 'detail' }
+            ], depth, appName: appId };
+            case 'PHOTOS': return { id: 'root', title: 'Recent', type: 'gallery', content: this.generateList(12, 'Photo'), depth, appName: appId };
+            
+            default: return { id: 'root', title: appId, type: 'list', content: this.generateList(5, 'Item', 'Description'), depth, appName: appId };
+        }
+    }
+
+    generateList(count: number, prefix: string = 'Item', sub: string = 'Detail', targetType: any = 'detail') {
+        return Array.from({length: count}, (_, i) => ({
+            label: `${prefix} ${i+1}`,
+            sub: `${sub} ${i+1}`,
+            targetType: targetType,
+            content: `This is detailed content for ${prefix} ${i+1}. Generated at Level 2+.`
+        }));
+    }
+
+    // -- Specific Context Generators --
+
+    generateNewsItems() {
+        return [
+            { label: 'Volcano Activity Increasing', sub: 'Breaking News • 2m ago', image: 'https://picsum.photos/100/100?random=1', targetType: 'article' },
+            { label: 'Tech Giants Merge', sub: 'Business • 1h ago', icon: '💼', targetType: 'article' },
+            { label: 'Global Markets Rally', sub: 'Finance • 3h ago', icon: '📈', targetType: 'article' },
+            { label: 'New AI Model Released', sub: 'Technology • 5h ago', image: 'https://picsum.photos/100/100?random=2', targetType: 'article' }
+        ];
+    }
+
+    generateWeatherItems() {
+        return [
+            { label: 'Taipei', sub: 'Rain • 24°C', icon: '🌧️', targetType: 'detail' },
+            { label: 'Tokyo', sub: 'Sunny • 28°C', icon: '☀️', targetType: 'detail' },
+            { label: 'New York', sub: 'Cloudy • 18°C', icon: '☁️', targetType: 'detail' },
+            { label: 'London', sub: 'Rain • 15°C', icon: '🌧️', targetType: 'detail' }
+        ];
+    }
+
+    generateStockItems() {
+        return [
+            { label: 'AAPL', sub: 'Apple Inc. • +1.2%', icon: '📈', targetType: 'chart' },
+            { label: 'TSMC', sub: 'Taiwan Semi • +3.5%', icon: '🏭', targetType: 'chart' },
+            { label: 'GOOGL', sub: 'Alphabet Inc. • -0.4%', icon: '📉', targetType: 'chart' },
+            { label: 'NVDA', sub: 'NVIDIA Corp • +5.1%', icon: '🚀', targetType: 'chart' }
+        ];
+    }
+
+    // -- Context Detail Helpers --
+    getContextualImage(app: string) {
+        if(app === 'NEWS') return 'https://picsum.photos/600/400?grayscale';
+        if(app === 'WEATHER') return 'https://images.unsplash.com/photo-1592210454359-9043f067919b?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80';
+        if(app === 'STOCKS') return 'https://images.unsplash.com/photo-1611974765270-ca1258634369?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80';
+        if(app === 'EEW') return 'https://images.unsplash.com/photo-1517524927509-0d314840846c?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80'; // Seismic Map
         
-        setTimeout(async () => {
-             const dummyBase64 = 'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA...'; // Truncated
-             const result = await this.gemini.analyzeVideo(dummyBase64, 'Describe a simulated video of an earthquake shaking a room. Identify key safety hazards.');
-             
-             this.videoResult.set(result);
-             this.isAnalyzingVideo.set(false);
-        }, 2000);
+        // Deterministic fallback (Use hash of app name instead of Math.random)
+        let hash = 0;
+        for (let i = 0; i < app.length; i++) {
+            hash = app.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return `https://picsum.photos/600/400?random=${Math.abs(hash)}`;
+    }
+
+    getContextualAuthor(app: string) {
+        if(app === 'NEWS') return 'Reuters Feed';
+        if(app === 'WEATHER') return 'CWA Met Office';
+        if(app === 'STOCKS') return 'Bloomberg Terminal';
+        if(app === 'EEW') return 'Seismic Center';
+        return 'System Admin';
+    }
+
+    getContextualBody(app: string) {
+        if(app === 'NEWS') return 'Breaking: Major seismic activity reported in the Pacific Ring of Fire. Markets react as supply chains face potential disruption. Authorities are monitoring the situation closely.';
+        if(app === 'WEATHER') return 'A high-pressure system is moving in from the east, bringing clear skies and rising temperatures. Expect UV index to peak around noon. Coastal areas should be wary of sudden gusts.';
+        if(app === 'STOCKS') return 'Tech sector rallies as semiconductor demand outstrips supply. TSMC leads gains in Asian trading hours. Analysts upgrade forecast for Q4 revenue.';
+        if(app === 'EEW') return 'Event Report: A significant seismic event has been detected. Preliminary data suggests shallow depth. Residents in affected areas should prepare for aftershocks. Check tsunami status immediately.';
+        return 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.';
+    }
+
+    // --- Helpers ---
+    getNotchText() { return this.volcano() ? 'VOLCANO WARNING' : 'EARTHQUAKE ALERT'; }
+    getAlertTitle() { return this.volcano() ? '火山噴發警報' : (this.tsunami() ? '海嘯警報' : '地震警報'); }
+    getAlertHeader() { 
+        if (this.tsunami()) return 'NATIONAL ALERT (TSUNAMI)';
+        if (this.volcano()) return 'PRESIDENTIAL ALERT (VOLCANO)';
+        return 'PRESIDENTIAL ALERT';
+    }
+    getAlertMessage() { 
+        if (this.volcano()) return '偵測到火山噴發，請防範火山灰。 (Eruption Detected)';
+        if (this.tsunami()) return '偵測到海嘯波，請立即前往高處避難。 (Tsunami Detected - Evacuate)';
+        return '偵測到強烈地震，請立即避難。 (Strong Earthquake Detected)'; 
     }
 }

@@ -6,18 +6,21 @@ export interface Station {
   lat: number;
   lng: number;
   terrain: 'BASIN' | 'PLAIN' | 'MOUNTAIN' | 'VALLEY' | 'OFFSHORE';
-  region: 'INLAND' | 'OFFSHORE'; // New classification
+  region: 'INLAND' | 'OFFSHORE'; 
+  stationType: 'SEISMIC' | 'TSUNAMI' | 'VOLCANO'; // New Classification
   isMajor?: boolean;
   isCitizen?: boolean;
-  isSpecial?: boolean; // For Rail sensors
+  isSpecial?: boolean; 
 }
 
 export interface SimulationStationData extends Station {
   dist: number; // Distance to specific event
   maxMMI: number; // Max intensity (S-wave dominated)
-  pMaxMMI: number; // Max P-wave intensity (New: for separate detection logic)
+  pMaxMMI: number; // Max P-wave intensity
   pTime: number;
   sTime: number;
+  ashTime?: number; // Time until ash arrival (seconds)
+  estimatedWaveHeight?: number; // Tsunami wave height in meters
 }
 
 @Injectable({
@@ -27,6 +30,11 @@ export class PhysicsService {
   // Base Wave Speeds (km/s)
   readonly VP_BASE = 6.0; 
   readonly VS_BASE = 3.5; 
+  
+  // Ash Speed (Realistic Wind)
+  // 60 km/h = ~1 km/minute = ~0.016 km/s
+  // Much slower than seismic waves
+  readonly ASH_SPEED_KM_S = 0.05; // Slightly accelerated for simulation effect, else it takes hours
   
   private _cachedStations: Station[] = [];
 
@@ -57,13 +65,23 @@ export class PhysicsService {
           // P-Wave Intensity (Detection - Decays faster)
           const pMaxMMI = this.calculateMMI(magnitude, dist, depth, s.terrain, 'P');
           
+          let estimatedWaveHeight = 0;
+          if (s.stationType === 'TSUNAMI') {
+              estimatedWaveHeight = this.calculateTsunamiHeight(magnitude, dist, depth);
+          }
+
+          // Ash Arrival (Only relevant for Volcano events, but calculated for all)
+          const ashTime = dist / this.ASH_SPEED_KM_S;
+          
           return {
               ...s,
               dist,
               maxMMI,
               pMaxMMI,
               pTime,
-              sTime
+              sTime,
+              ashTime,
+              estimatedWaveHeight
           };
       });
 
@@ -87,11 +105,31 @@ export class PhysicsService {
       };
   }
 
+  // New Physics Model for Tsunami Height
+  calculateTsunamiHeight(mag: number, distKm: number, depthKm: number): number {
+      // Must be shallow and large magnitude
+      if (depthKm > 50 || mag < 6.5) return 0;
+      
+      // Base energy
+      const energy = Math.pow(10, mag - 6.5);
+      
+      // Decay factor: Logarithmic decay with distance (1/R is too strong for open ocean, use 1/sqrt(R) or similar)
+      const distFactor = 1 / Math.sqrt(Math.max(10, distKm));
+      
+      // Calculate height in meters
+      let height = energy * distFactor * 5.0; // Scaling constant
+      
+      // Add some randomness for bathymetry
+      height *= (0.8 + Math.random() * 0.4);
+      
+      return height;
+  }
+
   private generateMassiveNetwork(): Station[] {
     const stations: Station[] = [];
     let idCounter = 1;
 
-    // 1. Major Cities
+    // 1. Major Cities (Seismic)
     const cities = [
         { name: '台北 (Taipei)', lat: 25.03, lng: 121.56, type: 'BASIN' },
         { name: '新北 (New Taipei)', lat: 25.01, lng: 121.46, type: 'BASIN' },
@@ -118,11 +156,12 @@ export class PhysicsService {
             lng: city.lng,
             terrain: city.type as any,
             region: city.type === 'OFFSHORE' ? 'OFFSHORE' : 'INLAND',
+            stationType: 'SEISMIC',
             isMajor: true
         });
     });
 
-    // 2. High-Fidelity Japan Network
+    // 2. High-Fidelity Japan/Taiwan Seismic Network
     this.generateZone(stations, 1200, { latMin: 21.0, latMax: 26.0, lngMin: 119.0, lngMax: 123.0 }, 'TW', idCounter);
     idCounter += 1200;
     this.generateZone(stations, 300, { latMin: 24.0, latMax: 30.0, lngMin: 123.0, lngMax: 130.0 }, 'RYUKYU', idCounter, true);
@@ -134,6 +173,13 @@ export class PhysicsService {
     this.generateZone(stations, 2000, { latMin: 35.0, latMax: 41.5, lngMin: 137.0, lngMax: 142.0 }, 'E-HONSHU', idCounter);
     idCounter += 2000;
     this.generateZone(stations, 700, { latMin: 41.5, latMax: 45.5, lngMin: 139.5, lngMax: 146.0 }, 'HOKKAIDO', idCounter);
+    
+    // 3. Volcanic Monitoring Stations (Specific Clusters)
+    this.generateVolcanoCluster(stations, 'TVO-TATUN', '大屯火山 (Tatun)', 25.17, 121.55, 10);
+    this.generateVolcanoCluster(stations, 'TVO-GUI', '龜山島 (Guishan)', 24.84, 121.95, 5);
+    this.generateVolcanoCluster(stations, 'JVO-SAKU', '櫻島 (Sakurajima)', 31.59, 130.65, 8);
+    this.generateVolcanoCluster(stations, 'JVO-ASO', '阿蘇山 (Aso)', 32.88, 131.10, 8);
+    this.generateVolcanoCluster(stations, 'JVO-FUJI', '富士山 (Fuji)', 35.36, 138.72, 12);
         
     return stations;
   }
@@ -150,12 +196,14 @@ export class PhysicsService {
 
         const isOffshore = this.isOffshore(lat, lng);
         
+        // Distribution Density Control
         if (prefix === 'TW' && isOffshore && Math.random() > 0.1) continue; 
         if (prefix !== 'TW' && isOffshore && Math.random() > 0.25) continue; 
 
         let terrain: any = isOffshore ? 'OFFSHORE' : 'MOUNTAIN';
         if (!isOffshore && Math.random() > 0.6) terrain = 'PLAIN';
 
+        // Add Seismic Station
         stations.push({
             id: `${prefix}-${startId + added}`,
             name: isOffshore ? `${prefix}-Sea` : `${prefix}-Stn`,
@@ -163,10 +211,39 @@ export class PhysicsService {
             lng: lng,
             terrain: terrain,
             region: isOffshore ? 'OFFSHORE' : 'INLAND',
+            stationType: 'SEISMIC',
             isSpecial: Math.random() > 0.95 
         });
+
+        // Add Tsunami Buoy (If offshore and chance)
+        if (isOffshore && Math.random() > 0.5) {
+             stations.push({
+                id: `TSU-${prefix}-${startId + added}`,
+                name: `${prefix}-Buoy`,
+                lat: lat + 0.01, // Slightly offset
+                lng: lng + 0.01,
+                terrain: 'OFFSHORE',
+                region: 'OFFSHORE',
+                stationType: 'TSUNAMI'
+            });
+        }
+
         added++;
     }
+  }
+
+  private generateVolcanoCluster(stations: Station[], idPrefix: string, name: string, lat: number, lng: number, count: number) {
+      for(let i=0; i<count; i++) {
+          stations.push({
+              id: `${idPrefix}-${i+1}`,
+              name: `${name}-${i+1}`,
+              lat: lat + (Math.random() - 0.5) * 0.1, // Cluster around the peak
+              lng: lng + (Math.random() - 0.5) * 0.1,
+              terrain: 'MOUNTAIN',
+              region: 'INLAND',
+              stationType: 'VOLCANO'
+          });
+      }
   }
 
   calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -187,20 +264,18 @@ export class PhysicsService {
     
     if (waveType === 'S') {
         // S-wave: Standard CWA/MMI attenuation
-        // Modified constants for sharper falloff offshore vs inland
         baseI = 1.65 * mag - 4.2 * Math.log10(R < 5 ? 5 : R) - 0.003 * R;
     } else {
         // P-wave: Weaker, decays faster, but arrives first
-        // Typically 2-3 intensity units lower than S, and faster decay over distance
-        baseI = 1.4 * mag - 4.8 * Math.log10(R < 5 ? 5 : R) - 0.006 * R;
+        baseI = 1.45 * mag - 4.8 * Math.log10(R < 5 ? 5 : R) - 0.005 * R;
     }
 
-    // Site Effects (Terrain Amplification) - Enhanced for better regional fidelity
+    // Site Effects (Terrain Amplification)
     let siteAmp = 0;
-    if (terrain === 'BASIN') siteAmp = 1.2; // Taipei Basin effect stronger
+    if (terrain === 'BASIN') siteAmp = 1.2; 
     if (terrain === 'PLAIN') siteAmp = 0.4;
-    if (terrain === 'MOUNTAIN') siteAmp = -0.7; // Hard rock attenuation
-    if (terrain === 'OFFSHORE') siteAmp = -1.1; // Seafloor absorption/distance perception
+    if (terrain === 'MOUNTAIN') siteAmp = -0.7; 
+    if (terrain === 'OFFSHORE') siteAmp = -1.1; 
 
     let final = baseI + siteAmp;
     
@@ -249,6 +324,17 @@ export class PhysicsService {
       case '7級': return '#be185d'; // Fuchsia
       default: return '#334155'; // Slate
     }
+  }
+  
+  // Refined Tsunami Color Scale based on Wave Height (Meters)
+  getTsunamiColor(heightM: number): string {
+      if (heightM <= 0) return '#0891b2'; // Normal (Cyan-700)
+      if (heightM < 0.5) return '#22d3ee'; // Minor (Cyan-400)
+      if (heightM < 1.5) return '#4ade80'; // Advisory (Green)
+      if (heightM < 3.0) return '#facc15'; // Watch (Yellow)
+      if (heightM < 5.0) return '#f97316'; // Warning (Orange)
+      if (heightM < 10.0) return '#dc2626'; // Major (Red)
+      return '#a855f7'; // Catastrophic (Purple)
   }
 
   isOffshore(lat: number, lng: number): boolean {
