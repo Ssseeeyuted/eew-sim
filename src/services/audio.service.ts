@@ -80,25 +80,28 @@ export class AudioService {
 
     const t = this.audioCtx.currentTime;
     const duration = 6; // Play for 6 seconds
-    const cycleDuration = 0.8; // Each tone lasts 0.4s
-
+    
     const osc = this.audioCtx.createOscillator();
-    osc.type = 'sine';
+    osc.type = 'sawtooth'; // More aggressive for alert
     this.activeOscillator = osc;
 
     const gainNode = this.audioCtx.createGain();
-    gainNode.gain.setValueAtTime(0.25, t); // volume
-    gainNode.gain.linearRampToValueAtTime(0, t + duration); // fade out over the duration
+    gainNode.gain.setValueAtTime(0.25, t); 
+    gainNode.gain.linearRampToValueAtTime(0, t + duration); 
     this.activeGain = gainNode;
 
-    const highFreq = 880; // A5
-    const lowFreq = 659; // E5
+    // Standard PWS/EAS-like two-tone (853Hz / 960Hz)
+    const lowFreq = 853; 
+    const highFreq = 960;
+    const cycleDuration = 0.5; 
 
+    osc.frequency.setValueAtTime(lowFreq, t);
+    
     // Schedule frequency changes
-    for (let i = 0; i < duration / cycleDuration; i++) {
-      const cycleStart = t + i * cycleDuration;
-      osc.frequency.setValueAtTime(highFreq, cycleStart);
-      osc.frequency.setValueAtTime(lowFreq, cycleStart + cycleDuration / 2);
+    // Create a rapid alternation for urgency
+    for (let i = 0; i < duration * 4; i++) {
+        const time = t + i * 0.25;
+        osc.frequency.setValueAtTime(i % 2 === 0 ? lowFreq : highFreq, time);
     }
     
     osc.connect(gainNode);
@@ -125,5 +128,61 @@ export class AudioService {
   playArrivalSound() {
       if (this.isMuted) return;
       this.playTone(440, 'triangle', 0.3);
+  }
+
+  // Distinct sounds for Intensity Gears 1-7
+  playIntensitySound(level: number) {
+      if (this.isMuted) return;
+      this.initContext();
+      if (!this.audioCtx) return;
+      
+      const t = this.audioCtx.currentTime;
+
+      switch (level) {
+          case 1: // Gear 1: Subtle notification (Ping)
+              this.playTone(1000, 'sine', 0.15);
+              break;
+          case 2: // Gear 2: Double Ping
+              this.playTone(1000, 'sine', 0.15);
+              this.playTone(1000, 'sine', 0.15, 0.2);
+              break;
+          case 3: // Gear 3: Upward Chime (Info)
+              this.playTone(660, 'triangle', 0.2);
+              this.playTone(880, 'triangle', 0.2, 0.15);
+              break;
+          case 4: // Gear 4: Minor Chord (Warning start)
+              this.playTone(523, 'square', 0.3); // C5
+              this.playTone(622, 'square', 0.3, 0.05); // Eb5 (minor)
+              this.playTone(784, 'square', 0.3, 0.1); // G5
+              break;
+          case 5: // Gear 5: Rapid Pulse (Strong shaking)
+              for(let i=0; i<3; i++) {
+                  this.playTone(1200, 'sawtooth', 0.1, i * 0.12);
+              }
+              break;
+          case 6: // Gear 6: Siren Sweep (Severe)
+               const osc = this.audioCtx.createOscillator();
+               const gain = this.audioCtx.createGain();
+               osc.type = 'sawtooth';
+               osc.frequency.setValueAtTime(800, t);
+               osc.frequency.linearRampToValueAtTime(1600, t + 0.4);
+               gain.gain.setValueAtTime(0.3, t);
+               gain.gain.exponentialRampToValueAtTime(0.01, t + 0.4);
+               osc.connect(gain);
+               gain.connect(this.audioCtx.destination);
+               osc.start(t);
+               osc.stop(t + 0.4);
+               break;
+          case 7: // Gear 7: Dissonant Alarm (Catastrophic)
+               // Tritone dissonance
+               this.playTone(800, 'sawtooth', 0.6);
+               this.playTone(1131, 'sawtooth', 0.6); // approx F#5 (tritone from C5ish base)
+               // Rapid amplitude modulation effect manually?
+               // Just stick to raw dissonance
+               break;
+          default:
+               // Fallback for >7
+               this.playIntensitySound(7);
+      }
   }
 }

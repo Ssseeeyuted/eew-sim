@@ -177,6 +177,9 @@ export class AppComponent implements OnInit {
   private lastDataUpdateTime = 0;
   private frameCount = 0;
   private lastAlarmTime = 0;
+  
+  // Audio Gears
+  private currentAudioGear = 0;
 
   constructor() {
     this.stations.set(this.physics.getStations());
@@ -453,14 +456,17 @@ export class AppComponent implements OnInit {
       
       this.startEvent({ lat: targetVolcano.lat, lng: targetVolcano.lng }, 6.0, 1, 'VOLCANO');
 
+      // Guarantee offshore location for the associated quake to ensure Tsunami alert triggers
+      // Shift significantly to ocean (e.g. +1.0 deg)
       const quakeLoc = { 
-          lat: targetVolcano.lat + (Math.random() > 0.5 ? 0.5 : -0.5), 
-          lng: targetVolcano.lng + (Math.random() > 0.5 ? 0.5 : -0.5) 
+          lat: targetVolcano.lat + (Math.random() > 0.5 ? 1.0 : -1.0), 
+          lng: targetVolcano.lng + (Math.random() > 0.5 ? 1.0 : -1.0) 
       };
       
       setTimeout(() => {
           if (this.isSimulating()) {
-              this.startEvent(quakeLoc, 7.8, 25, 'MAIN');
+              // High Mag (8.2) + Shallow (10km) + Offshore location = Guaranteed Tsunami Risk
+              this.startEvent(quakeLoc, 8.2, 10, 'MAIN'); 
           }
       }, 5000); 
   }
@@ -628,7 +634,7 @@ export class AppComponent implements OnInit {
                 radius: 2.0,
                 fillColor: '#f97316',
                 color: 'transparent',
-                weight: 0,
+                weight: 1.0,
                 fillOpacity: 1.0
             });
         }
@@ -657,10 +663,10 @@ export class AppComponent implements OnInit {
             const color = this.physics.getTsunamiColor(simulatedHeight);
             
             marker.setStyle({
-                radius: 2.5 + simulatedHeight,
+                radius: 4, // FIXED: Keep fixed size, only change color
                 color: color,
                 fillColor: color,
-                fillOpacity: 0.7,
+                fillOpacity: 0.9,
                 weight: 1
             });
         } else if (type === 'VOLCANO') {
@@ -692,6 +698,7 @@ export class AppComponent implements OnInit {
       this.tsunamiAlert.set(false);
       this.volcanoAlert.set(false);
       this.isPhoneOpen.set(true);
+      this.currentAudioGear = 0; // Reset audio gear
       
       this.mainCountdowns.set([]);
       this.secondaryCountdowns.set([]);
@@ -942,6 +949,21 @@ export class AppComponent implements OnInit {
           if (triggeredKeys.length > 0) {
              currentMaxMMI_numeric = Math.max(0, ...Object.values(this.stationCurrentMaxMMI));
              this.maxDetectedIntensity.set(this.physics.toCWAIntensity(currentMaxMMI_numeric));
+
+             // Audio Gear Logic (1-7)
+             // Map roughly to CWA levels: <1.5=1, <2.5=2, etc.
+             let detectedGear = 1;
+             if (currentMaxMMI_numeric >= 1.5) detectedGear = 2;
+             if (currentMaxMMI_numeric >= 2.5) detectedGear = 3;
+             if (currentMaxMMI_numeric >= 3.5) detectedGear = 4;
+             if (currentMaxMMI_numeric >= 4.5) detectedGear = 5;
+             if (currentMaxMMI_numeric >= 6.0) detectedGear = 6; // Jump slightly for heavy
+             if (currentMaxMMI_numeric >= 7.5) detectedGear = 7;
+
+             if (detectedGear > this.currentAudioGear) {
+                 this.audio.playIntensitySound(detectedGear);
+                 this.currentAudioGear = detectedGear;
+             }
           }
 
           if (globalElapsed - this.lastReportTime > 0.6 && triggeredKeys.length > 5) {
@@ -1091,6 +1113,7 @@ export class AppComponent implements OnInit {
       this.showMobileControls.set(false);
       this.selectedStation.set(null);
       this.isPhoneOpen.set(true); 
+      this.currentAudioGear = 0;
       
       this.stationAshState = {}; 
       Object.keys(this.stationMarkers).forEach(id => {

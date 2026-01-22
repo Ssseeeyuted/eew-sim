@@ -199,7 +199,7 @@ interface NavPage {
                                    </div>
                                    <div class="flex items-end gap-3 mb-2">
                                        <div class="text-7xl font-black tracking-tighter leading-none">{{ intensity() || '0' }}</div>
-                                       <div class="text-2xl font-bold text-white/80 mb-1">M{{ magnitude() || '0.0' }}</div>
+                                       <div class="text-2xl font-bold text-white/80 mb-1 tracking-tighter leading-none whitespace-nowrap">M{{ magnitude() || '0.0' }}</div>
                                    </div>
                                    <div class="text-[15px] font-medium leading-snug opacity-90 text-white/90 line-clamp-2 pr-4">{{ location() || 'No Active Event' }}</div>
                                    <div class="mt-6 flex gap-2">
@@ -503,6 +503,7 @@ export class PhoneAlertComponent {
     isAlertDismissed = signal(false);
     batteryLevel = signal(100);
     flashlightOn = signal(false);
+    alertMessage = signal(''); // Store generated message
     
     // Parallax State
     mouseX = 0;
@@ -532,11 +533,41 @@ export class PhoneAlertComponent {
 
     constructor() {
         effect(() => { 
-            if (this.active()) { 
+            const isActive = this.active();
+            // Track key changes to update message if event type escalates
+            const isVolcano = this.volcano();
+            const isTsunami = this.tsunami();
+            const loc = this.location();
+
+            if (isActive) { 
                 this.isAlertDismissed.set(false);
+                this.updateAlertMessage();
             } 
         });
         setInterval(() => { this.batteryLevel.update(v => Math.max(10, v - 0.1)); }, 30000);
+    }
+
+    private updateAlertMessage() {
+        const d = new Date();
+        const dateStr = `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}`;
+        const timeStr = this.time();
+        const loc = this.location() || '未知地點';
+        // Random CWA-style ID for realism
+        const id = `0${Math.floor(Math.random()*9)+1}_${Math.floor(Math.random()*9000)+1000} ${Math.floor(Math.random()*9000)+1000}`;
+
+        if (this.volcano()) {
+            this.alertMessage.set(
+                `[火山噴發訊息 Volcanic Eruption Message] ${dateStr} ${timeStr}左右 ${loc} 偵測到火山噴發，請注意火山灰擴散並遠離危險區域，氣象署。Volcanic eruption detected. Beware of ashfall and stay away from danger zones. CWA ${id} 避難宣導：https://gov.tw/HmJ`
+            );
+        } else if (this.tsunami()) {
+            this.alertMessage.set(
+                `[海嘯警報 Tsunami Alert] ${dateStr} ${timeStr}左右 ${loc} 發生地震引發海嘯，沿海民眾請立即疏散至高處避難，氣象署。Tsunami warning issued. Coastal residents evacuate to higher ground immediately. CWA ${id} 避難宣導：https://gov.tw/HmJ`
+            );
+        } else {
+            this.alertMessage.set(
+                `[地震速報 Earthquake Alert] ${dateStr} ${timeStr}左右 ${loc} 發生顯著有感地震，慎防強烈搖晃，就近避難「趴下、掩護、穩住」，氣象署。Felt earthquake alert. Keep calm and seek cover nearby. CWA ${id} 避難宣導：https://gov.tw/HmJ`
+            );
+        }
     }
 
     // --- Parallax Effect ---
@@ -726,8 +757,6 @@ export class PhoneAlertComponent {
         return 'PRESIDENTIAL ALERT';
     }
     getAlertMessage() { 
-        if (this.volcano()) return '偵測到火山噴發，請防範火山灰。 (Eruption Detected)';
-        if (this.tsunami()) return '偵測到海嘯波，請立即前往高處避難。 (Tsunami Detected - Evacuate)';
-        return '偵測到強烈地震，請立即避難。 (Strong Earthquake Detected)'; 
+        return this.alertMessage();
     }
 }

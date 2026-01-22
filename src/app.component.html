@@ -502,7 +502,10 @@
         </div>
         
         <!-- PHONE SIMULATION (Toggleable, No Zoom) -->
-        <div class="fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2 pointer-events-none" [class.hidden]="!isSimulating()">
+        <div class="fixed z-[9999] flex flex-col items-end gap-2 pointer-events-none
+                    bottom-20 right-4 
+                    md:bottom-4 md:right-4"
+             [class.hidden]="!isSimulating()">
             
             <!-- Phone Container -->
             <div class="transition-all duration-500 origin-bottom-right transform will-change-transform"
@@ -511,7 +514,7 @@
                 [class.translate-y-0]="isPhoneOpen()"
                 [class.opacity-100]="isPhoneOpen()">
                 <!-- Scale adjustments to fit screen -->
-                <div class="pointer-events-auto transform scale-[0.6] sm:scale-75 md:scale-90 lg:scale-100 origin-bottom-right transition-transform duration-300">
+                <div class="pointer-events-auto transform scale-[0.55] sm:scale-[0.6] md:scale-90 lg:scale-100 origin-bottom-right transition-transform duration-300">
                     <app-phone-alert 
                         [active]="isAlertActive()"
                         [time]="currentTimeStr()"
